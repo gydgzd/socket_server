@@ -1,0 +1,18 @@
+2018-11-28 16:24:35  ****************************BEGIN****************************
+2018-11-28 16:24:35  INFO: bind succeed to port 3401
+2018-11-28 16:24:35  INFO: listen succeed.
+2018-11-28 16:24:35  ****************************BEGIN****************************
+2018-11-28 16:24:35  INFO: bind succeed to port 3402
+2018-11-28 16:24:35  INFO: listen succeed.
+2018-11-28 16:25:28  INFO: 172.18.10.132:46436 --> 172.18.10.129:3401 connected, there are 1 clients online!
+2018-11-28 16:25:28  INFO: set keepalive succeed!
+2018-11-28 16:29:55  ****************************BEGIN****************************
+2018-11-28 16:29:55  INFO: bind succeed to port 3401
+2018-11-28 16:29:55  INFO: listen succeed.
+2018-11-28 16:29:55  ****************************BEGIN****************************
+2018-11-28 16:29:55  INFO: bind succeed to port 3402
+2018-11-28 16:29:55  INFO: listen succeed.
+2018-11-28 16:31:10  INFO: 172.18.10.132:58084 --> 172.18.10.129:3402 connected, there are 1 clients online!
+2018-11-28 16:31:10  INFO: set keepalive succeed!
+2018-11-28 16:31:10  INFO: 172.18.10.132:46438 --> 172.18.10.129:3401 connected, there are 1 clients online!
+2018-11-28 16:31:10  INFO: set keepalive succeed!
