@@ -1,5 +1,8 @@
 /*
  * MySocket_server.h
+ * Defined my socket server class:
+ * How to use:
+ * init->recv or send
  *
  *  Created on: Jun 15, 2017
  *      Author: gyd
@@ -41,6 +44,9 @@ typedef unsigned char BYTE;
 extern std::mutex g_recvMutex;
 extern std::mutex g_sendMutex;
 extern std::mutex g_clientNumMutex;
+/*
+ * to be added: msg type, is compressed and so on
+ */
 struct MSGBODY
 {
 	BYTE msg[MAXLENGTH] = "";
@@ -57,6 +63,7 @@ struct CONNECTION
     char clientIP[64] = "";
     char serverIP[64] = "";
 };
+
 class MySocket_server
 {
 public:
@@ -68,7 +75,10 @@ public:
 
     int connectTo(char* server_IP);    // connect
     int serv();
+
     int recvAndSend(const CONNECTION client);
+    int myrecv(const CONNECTION client);  // recv thread function
+    int mysend(const CONNECTION client);  // send thread function
     int getMsg();
     int sendMsg();                     // transfer message
     int fileSend();                    // transfer file
@@ -77,7 +87,7 @@ private:
 
     int mn_clientCounts;        // if send counts equal to client counts,
     int mn_clientSend;          // remove one msg from the send queue
-    int mn_isFlushed;           // if the send buffer flushed(flushed is 1),when flushed, each client can recv new msg
+    int mn_isFlushed;           // if the send buffer flushed(flushed is 1). When flushed, each client can recv new msg
     struct sockaddr_in m_serverAddr;
     vector<string> mv_clients;
     set<string>    mset_clients;      // storage of all client ip that connected to server
