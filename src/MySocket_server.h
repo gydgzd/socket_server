@@ -49,8 +49,9 @@ extern std::mutex g_clientNumMutex;
  */
 struct MSGBODY
 {
-	BYTE msg[MAXLENGTH] = "";
-	int length = 0;
+    int type;              // 0:int, 1:string, 2: byte(hex)
+    int length;
+    BYTE msg[MAXLENGTH];
 };
 /*
  * use to form a string clientIP:clientPort--> serverIP:serverPort
@@ -67,21 +68,22 @@ struct CONNECTION
 class MySocket_server
 {
 public:
-    int mn_socket_fd;                  // for listen use
-//	int mn_connect_fd;                 // for connection use
+    int mn_socket_fd;                     // for listen use
+//	int mn_connect_fd;                    // for connection use
     MySocket_server();
     ~MySocket_server();
+
     int init(int listenPort, queue<MSGBODY> * msgQToRecv, queue<MSGBODY> * msgQToSend); // socket(),get ready to communicate.
 
-    int connectTo(char* server_IP);    // connect
+    int connectTo(char* server_IP);       // connect
     int serv();
 
     int recvAndSend(const CONNECTION client);
     int myrecv(const CONNECTION client);  // recv thread function
     int mysend(const CONNECTION client);  // send thread function
     int getMsg();
-    int sendMsg();                     // transfer message
-    int fileSend();                    // transfer file
+    int sendMsg();                        // transfer message
+    int fileSend();                       // transfer file
 
 private:
 
@@ -92,8 +94,8 @@ private:
     vector<string> mv_clients;
     set<string>    mset_clients;      // storage of all client ip that connected to server
 
-    queue<MSGBODY>  m_msgQueueRecv;  // a queue to storage the msg
-    queue<MSGBODY>  m_msgQueueSend;
+    static queue<MSGBODY>  m_msgQueueRecv;  // a queue to storage the msg
+    static queue<MSGBODY>  m_msgQueueSend;
 
     queue<MSGBODY> * mp_msgQueueRecv; // pointer to queue
     queue<MSGBODY> * mp_msgQueueSend;

@@ -26,23 +26,26 @@ MySocket_server::~MySocket_server()
 	close(mn_socket_fd);
 }
 
-int MySocket_server::init(int listenPort, queue<MSGBODY> * msgQToRecv, queue<MSGBODY> * msgQToSend)
+int MySocket_server::init(int listenPort, queue<MSGBODY> * msgQToRecv = &m_msgQueueRecv, queue<MSGBODY> * msgQToSend = &m_msgQueueSend)
 {
 	char logmsg[512] = "";
+	mylog.logException("****************************BEGIN****************************");
     if(listenPort <= 0 || listenPort >=65536)
     {
-		mylog.logException("ERROR: listen port error, should between 1-65535!");
-		return -1;
+		mylog.logException("ERROR: listen port error, should between 1-65535! \nExit.");
+		exit(-1);
+		//return -1;
 	}
+
+	// initialize
 	mp_msgQueueRecv = msgQToRecv;
 	mp_msgQueueSend = msgQToSend;
-	// initialize
-	mylog.logException("****************************BEGIN****************************");
 	if( (mn_socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1 )
 	{
-		sprintf(logmsg, "ERROR: Create socket error: %s (errno: %d)\n", strerror(errno), errno);
+		sprintf(logmsg, "ERROR: Create socket error: %s (errno: %d). \nExit.", strerror(errno), errno);
 		mylog.logException(logmsg);
-		return -1;
+		exit(-1);
+		//return -1;
 	}
 
 	memset(&m_serverAddr, 0, sizeof(m_serverAddr));
@@ -52,25 +55,28 @@ int MySocket_server::init(int listenPort, queue<MSGBODY> * msgQToRecv, queue<MSG
 	int optval = 1;
 	if(-1 == setsockopt(mn_socket_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)))
 	{
-		sprintf(logmsg, "ERROR: Reuse addr error: %s (errno: %d)\n", strerror(errno), errno);
+		sprintf(logmsg, "ERROR: Reuse addr error: %s (errno: %d). \nExit.", strerror(errno), errno);
 		mylog.logException(logmsg);
-		return -1;
+		exit(-1);
+		//return -1;
 	}
 
 	// bind
 	if(-1 == bind(mn_socket_fd, (struct sockaddr*)&m_serverAddr, sizeof(m_serverAddr)) )
 	{
-		sprintf(logmsg, "ERROR: Bind error: %s (errno: %d)\n", strerror(errno), errno);
+		sprintf(logmsg, "ERROR: Bind error: %s (errno: %d). \nExit.", strerror(errno), errno);
 		mylog.logException(logmsg);
-		return -1;
+		exit(-1);
+        //return -1;
 	}
 	sprintf(logmsg, "INFO: bind succeed to port %d", listenPort);
 	mylog.logException(logmsg);
 	if(-1 == listen(mn_socket_fd, 10)  )
 	{
-		sprintf(logmsg, "ERROR: Listen error: %s (errno: %d)\n", strerror(errno), errno);
+		sprintf(logmsg, "ERROR: Listen error: %s (errno: %d). \nExit.", strerror(errno), errno);
 		mylog.logException(logmsg);
-		return -1;
+		exit(-1);
+        //return -1;
 	}
 	mylog.logException("INFO: listen succeed.");
 	return 0;
@@ -147,6 +153,8 @@ int MySocket_server::serv()
 		std::thread th_recv{&MySocket_server::myrecv, this, client};
 		std::thread th_send{&MySocket_server::mysend, this, client};
 	//	std::thread th1{&MySocket_server::recvAndSend, this, client};
+		th_recv.join();
+		th_send.join();
 	//	th1.join();
 	//	th1.detach();
 	}

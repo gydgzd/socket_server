@@ -2,7 +2,7 @@
 // Name        : socket_server.cpp
 // Author      : gyd
 // Version     :
-// Copyright   : Copyright cnki.
+// Copyright   : gyd
 // Description : Hello World in C++, Ansi-style
 //============================================================================
 #include "socket_server.h"
