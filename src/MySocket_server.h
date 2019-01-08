@@ -50,7 +50,7 @@ extern std::mutex g_clientNumMutex;
 struct MSGBODY
 {
     int type;              // 0:int, 1:string, 2: byte(hex)
-    int length;
+    int length;            // length of msg
     BYTE msg[MAXLENGTH];
 };
 /*
@@ -74,13 +74,11 @@ public:
     ~MySocket_server();
 
     int init(int listenPort, queue<MSGBODY> * msgQToRecv, queue<MSGBODY> * msgQToSend); // socket(),get ready to communicate.
-
-    int connectTo(char* server_IP);       // connect
     int serv();
-
     int recvAndSend(const CONNECTION client);
     int myrecv(const CONNECTION client);  // recv thread function
     int mysend(const CONNECTION client);  // send thread function
+
     int getMsg();
     int sendMsg();                        // transfer message
     int fileSend();                       // transfer file

@@ -122,7 +122,6 @@ int fileTransfer(int argc, char **argv)
                     printf("Send File:  %s Failed!", fileName);
                     break;
                 }
-
                 memset(buffer, 0, sizeof(buffer));
             }
             fclose(fp);
