@@ -44,9 +44,8 @@ typedef unsigned char BYTE;
 extern std::mutex g_recvMutex;
 extern std::mutex g_sendMutex;
 extern std::mutex g_clientNumMutex;
-/*
- * to be added: msg type, is compressed and so on
- */
+
+#define MSGHEAD_LENGTH 8
 struct MSGBODY
 {
     int type;              // 0:int, 1:string, 2: byte(hex)
@@ -59,6 +58,7 @@ struct MSGBODY
 struct CONNECTION
 {
     int  socket_fd = 0;       //
+    int  status = 0;          // 0: closed; 1:connected
     int  clientPort = 0;      // test if ok
     int  serverPort = 0;
     char clientIP[64] = "";
@@ -76,8 +76,9 @@ public:
     int init(int listenPort, queue<MSGBODY> * msgQToRecv, queue<MSGBODY> * msgQToSend); // socket(),get ready to communicate.
     int serv();
     int recvAndSend(const CONNECTION client);
-    int myrecv(const CONNECTION client);  // recv thread function
-    int mysend(const CONNECTION client);  // send thread function
+    int myrecv( CONNECTION * client);  // recv thread function
+    int mysend( CONNECTION * client);  // send thread function
+
 
     int getMsg();
     int sendMsg();                        // transfer message
@@ -104,6 +105,8 @@ private:
     int safeDecClientCounts();          // safely desc a client count
     int msgCheck(const MSGBODY *msg);
     int setKeepalive(int fd, int idle = 10, int interval = 5, int probe = 3);
+    int logMsg(const MSGBODY *recvMsg, const char *logHead);
+
     int getMyIP();
 	int myclose();                      // close socket
 };
