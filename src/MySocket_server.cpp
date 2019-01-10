@@ -149,7 +149,7 @@ int MySocket_server::serv()
  */
 int MySocket_server::recvAndSend(const CONNECTION client)
 {
-	int isSend = 0;             // whether sended to this client: 1 is send, 0 not
+    int isSend = 0;             // whether sended to this client: 1 is send, 0 not
 
 	// get buffer
 /*	int s_length, r_length;
@@ -169,7 +169,6 @@ int MySocket_server::recvAndSend(const CONNECTION client)
 	char logmsg[512] = "";
 	char logHead[64] = "";
 	sprintf(logHead, "%s:%d --> %s:%d ", client.clientIP, client.clientPort, client.serverIP, client.serverPort);
-	char * p_hexLog = NULL;
 	//使用非阻塞io
 	int flags;
 	if( (flags = fcntl(client.socket_fd, F_GETFL, 0)) < 0)
@@ -201,26 +200,7 @@ int MySocket_server::recvAndSend(const CONNECTION client)
 		}
 		else                     // recv success
 		{
-			//	printf("%s %s recved: ", getLocalTime("%Y-%m-%d %H:%M:%S").c_str(), logHead);
-			//	for(int i=0; i<recvBuf.length; i++)
-			//		printf("%c", (unsigned char)recvBuf.msg[i]);
-			//	printf("\n");             //it will cause an error in daemon(broken pipe)
-			// log the hex
-			try
-			{
-				p_hexLog = new char[recvBuf.length*3 + 128];    // include the logHead
-				memset(p_hexLog, 0, recvBuf.length*3 + 128);
-				sprintf(p_hexLog, "INFO: %s recved: ", logHead);
-				int len = strlen(p_hexLog);
-				for(int i=0; i<recvBuf.length; i++)
-					sprintf(p_hexLog+len+3*i, "%02x ", (unsigned char)recvBuf.msg[i]);
-				mylog.logException(p_hexLog);
-				delete[] p_hexLog;
-			}catch(bad_alloc& bad)
-			{
-				sprintf(logmsg,"ERROR: Failed to alloc mem when log hex: %s", bad.what());
-				mylog.logException(logmsg);
-			}
+			logMsg(&recvBuf, logHead);
 			int ret = msgCheck(&recvBuf);
 			if(strcmp((char *)recvBuf.msg,"exit\n")==0 || recvBuf.length == 0)
 			{
@@ -317,14 +297,14 @@ int MySocket_server::recvAndSend(const CONNECTION client)
 int MySocket_server::myrecv( CONNECTION * client)
 {
     // get buffer
-/*  int r_length;
-    socklen_t optl = sizeof(s_length);
-    getsockopt(client.socket_fd,SOL_SOCKET,SO_RCVBUF,&r_length,&optl);   //获得连接套接字的接收端的缓冲区信息
+    int r_length;
+    socklen_t optl = sizeof(r_length);
+    getsockopt(client->socket_fd, SOL_SOCKET, SO_RCVBUF, &r_length, &optl);   //获得连接套接字的接收端的缓冲区信息
     printf("recv buffer = %d\n", r_length);
 
-    // set buffer
+/*    // set buffer
     int nRecvBufSize = 64*1024;              //设置为64K
-    setsockopt(client.socket_fd,SOL_SOCKET,SO_RCVBUF,(const char*)&nRecvBufSize,sizeof(int));
+    setsockopt(client->socket_fd, SOL_SOCKET,SO_RCVBUF, (const char*)&nRecvBufSize, sizeof(int));
 */
     char logmsg[512] = "";
     char logHead[64] = "";
@@ -337,6 +317,7 @@ int MySocket_server::myrecv( CONNECTION * client)
         printf("fcntl error: %s", strerror(errno));
         sprintf(logmsg, "ERROR: %s: fcntl error: %d--%s",logHead, errno, strerror(errno) );
         mylog.logException(logmsg);
+        client->status = 0;
         return -1;
     }
     fcntl(client->socket_fd, F_SETFL, flags | O_NONBLOCK);
@@ -362,14 +343,14 @@ int MySocket_server::myrecv( CONNECTION * client)
         }
         else                     // recv success
         {
-            if(strcmp((char *)recvMsg.msg,"exit\n")==0 || length == 0)
+            if( length == 0 )
             {
                 close(client->socket_fd);
                 // client count -1 when a client exit
                 safeDecClientCounts();
-                sprintf(logmsg, "INFO: %s: The child process is exit.Stop recving. There are %d clients online. \n", logHead, mn_clientCounts);
-                client->status = 0;
+                sprintf(logmsg, "INFO: %s: The child process is exit.Stop recving. There are %d clients online.", logHead, mn_clientCounts);
                 mylog.logException(logmsg);
+                client->status = 0;
                 return 0;
             }
         }
@@ -393,12 +374,12 @@ int MySocket_server::myrecv( CONNECTION * client)
             logMsg(&recvMsg, logHead);
             int ret = 0;
             //      ret = msgCheck(&recvBuf);
-            if(strcmp((char *)recvMsg.msg,"exit\n")==0 || length == 0)
+            if( length == 0 )
             {
                 close(client->socket_fd);
                 // client count -1 when a client exit
                 safeDecClientCounts();
-                sprintf(logmsg, "INFO: %s: The child process is exit.Stop recving. There are %d clients online. \n", logHead, mn_clientCounts);
+                sprintf(logmsg, "INFO: %s: The child process is exit. Recv thread exit. There are %d clients online.", logHead, mn_clientCounts);
                 client->status = 0;
                 mylog.logException(logmsg);
 
@@ -420,8 +401,6 @@ int MySocket_server::myrecv( CONNECTION * client)
                     if(mp_msgQueueRecv->size() == MAXQUEUELENGTH )
                         mp_msgQueueRecv->pop();
                     mp_msgQueueRecv->push(recvMsg);  // msg push back to the queue
-                //    sprintf(logmsg, "INFO: %s recved 1 valid message, add to queue. Total: %u in recv queue, %u in send queue.",logHead, (unsigned int)mp_msgQueueRecv->size(),(unsigned int)mp_msgQueueSend->size());
-                //    mylog.logException(logmsg);  // it's not accurate when splite recv and write
                 }
                 // do something handle the msg that received
                 // ....
@@ -440,18 +419,16 @@ int MySocket_server::myrecv( CONNECTION * client)
 int MySocket_server::mysend( CONNECTION * client)
 {
     int isSend = 0;             // whether sended to this client: 1 is send, 0 not
-
     // get buffer
-/*  int s_length;
+    int s_length;
     socklen_t optl = sizeof(s_length);
     getsockopt(client->socket_fd,SOL_SOCKET,SO_SNDBUF,&s_length,&optl);     //获得连接套接字发送端缓冲区的信息
     printf("send buffer = %d\n",s_length);
-
+/*
     // set buffer
     int nSendBufSize = 64*1024;//设置为64K
     setsockopt(client->socket_fd,SOL_SOCKET,SO_SNDBUF,(const char*)&nSendBufSize,sizeof(int));
 */
-
     char logmsg[512] = "";
     char logHead[64] = "";
     sprintf(logHead, "%s:%d --> %s:%d ", client->clientIP, client->clientPort, client->serverIP, client->serverPort);
@@ -504,11 +481,6 @@ int MySocket_server::mysend( CONNECTION * client)
                 return 0;
             }
         }
-        //
-        //  printf("%s %s sent: ", getLocalTime("%Y-%m-%d %H:%M:%S").c_str(), logHead);
-        //  for(int i=0; i<mqstr_msgQueueSend->front().length; i++)
-        //      printf("%2x", mqstr_msgQueueSend->front().msg[i]);
-        //  printf("\n");
 
         sprintf(logmsg, "INFO: %s send %d bytes", logHead, sendLen );
         mylog.logException(logmsg);
