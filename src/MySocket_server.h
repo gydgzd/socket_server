@@ -27,12 +27,14 @@
 #include <iostream>
 #include <vector>
 #include <set>
+#include <map>
 #include <queue>
 #include <thread>
 #include <mutex>
 #include <new>       // to catch bad alloc
 #include "Mylog.h"
 using namespace std;
+#define CONFIGFILE "config.conf"
 #define TOUP_PORT 39401
 #define TODOWN_PORT 39402
 #define MAXLENGTH 1024*64
@@ -68,44 +70,51 @@ struct CONNECTION
 class MySocket_server
 {
 public:
-    int mn_socket_fd;                     // for listen use
-//	int mn_connect_fd;                    // for connection use
+
     MySocket_server();
     ~MySocket_server();
 
+    int loadConfig();
+    // as a server
     int init(int listenPort, queue<MSGBODY> * msgQToRecv, queue<MSGBODY> * msgQToSend); // socket(),get ready to communicate.
     int serv();
     int recvAndSend(const CONNECTION client);
-    int myrecv( CONNECTION * client);  // recv thread function
-    int mysend( CONNECTION * client);  // send thread function
-
+    int myrecv( CONNECTION * client);      // recv thread function
+    int mysend( CONNECTION * client);      // send thread function
+    // as a client
+    int myconnect(const char* server_IP, int server_port);// connect
 
     int getMsg();
-    int sendMsg();                        // transfer message
-    int fileSend();                       // transfer file
+    int fileSend();                         // transfer file
 
 private:
+    int mn_socketToLocal;                   // for listen use (in init)
+    int mn_socketToServer;                  // for connect use
 
-    int mn_clientCounts;        // if send counts equal to client counts,
-    int mn_clientSend;          // remove one msg from the send queue
-    int mn_isFlushed;           // if the send buffer flushed(flushed is 1). When flushed, each client can recv new msg
-    struct sockaddr_in m_serverAddr;
+    int mn_clientCounts;                    // if send counts equal to client counts,
+//    int mn_clientSend;                    // remove one msg from the send queue
+
+    struct sockaddr_in m_localAddr;         // local address, for bind as a server
+    struct sockaddr_in m_serverAddr;        // server address,for connect
+
     vector<string> mv_clients;
-    set<string>    mset_clients;      // storage of all client ip that connected to server
+    set<string>    mset_clients;            // storage of all client ip that connected to server
+    map<string,string> mmap_config;         // map for config
 
     static queue<MSGBODY>  m_msgQueueRecv;  // a queue to storage the msg
     static queue<MSGBODY>  m_msgQueueSend;
 
-    queue<MSGBODY> * mp_msgQueueRecv; // pointer to queue
+    queue<MSGBODY> * mp_msgQueueRecv;       // pointer to recv queue
     queue<MSGBODY> * mp_msgQueueSend;
 
     Mylog mylog;
 
-    int safeAddClientCounts();          // safely add a client count
-    int safeDecClientCounts();          // safely desc a client count
+    int safeAddClientCounts();              // safely add a client count
+    int safeDecClientCounts();              // safely desc a client count
     int msgCheck(const MSGBODY *msg);
     int setKeepalive(int fd, int idle = 10, int interval = 5, int probe = 3);
     int logMsg(const MSGBODY *recvMsg, const char *logHead);
+    int reconnect();
 
     int getMyIP();
 	int myclose();                      // close socket
