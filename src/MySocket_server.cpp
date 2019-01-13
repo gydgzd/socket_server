@@ -11,7 +11,7 @@ std::mutex g_clientNumMutex;
 MySocket_server::MySocket_server()
 {
 	mn_socketToLocal = 0;
-
+	mn_socketToServer = 0;
 	mn_clientCounts = 0;
 //	mn_clientSend = 0;
 
@@ -38,15 +38,15 @@ int MySocket_server::loadConfig()
         return -1;
     }
     string linebuf;
-    string key, value;
+    string param, value;
     while (getline(infile, linebuf))   // !infile.eof()
     {
         stringstream ss(linebuf);
-        getline(ss, key, '=');
+        getline(ss, param, '=');
         ss >> value;
-        if(key.substr(0, 1) == "#" || key.substr(0, 1) == "\r" || key.substr(0, 1) == "\0")
+        if(param.substr(0, 1) == "#" || param.substr(0, 1) == "\r" || param.substr(0, 1) == "\0")
             continue;
-        mmap_config[key] = value;
+        mmap_config[param] = value;
 
     }
     infile.close();
@@ -55,13 +55,15 @@ int MySocket_server::loadConfig()
     return 0;
 }
 
-int MySocket_server::init(int listenPort, queue<MSGBODY> * msgQToRecv = &m_msgQueueRecv, queue<MSGBODY> * msgQToSend = &m_msgQueueSend)
+int MySocket_server::init( queue<MSGBODY> * msgQToRecv = &m_msgQueueRecv, queue<MSGBODY> * msgQToSend = &m_msgQueueSend)
 {
 	char logmsg[512] = "";
 	mylog.logException("****************************BEGIN****************************");
+	int listenPort = 0;
+	listenPort = std::stoi(mmap_config["toServerPort"]);
     if(listenPort <= 0 || listenPort >=65536)
     {
-		mylog.logException("ERROR: listen port error, should between 1-65535! Program exit.");
+		mylog.logException("ERROR[CONFIG]: Param \"toServerPort error\", should between 1-65535! Program exit.");
 		exit(-1);
 		//return -1;
 	}

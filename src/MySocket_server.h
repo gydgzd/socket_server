@@ -76,7 +76,7 @@ public:
 
     int loadConfig();
     // as a server
-    int init(int listenPort, queue<MSGBODY> * msgQToRecv, queue<MSGBODY> * msgQToSend); // socket(),get ready to communicate.
+    int init( queue<MSGBODY> * msgQToRecv, queue<MSGBODY> * msgQToSend); // socket(),get ready to communicate.
     int serv();
     int recvAndSend(const CONNECTION client);
     int myrecv( CONNECTION * client);      // recv thread function

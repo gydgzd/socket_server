@@ -25,8 +25,8 @@ int main(int argc, char **argv) {
  	MySocket_server serverToDown;
 // 	serverToUp.init(3401, &msgQueueFromUp, &msgQueueFromDown);
 // 	std::thread th1{ &MySocket_server::serv, &serverToUp};
-
- 	serverToDown.init(33402, &msgQueueFromDown, &msgQueueFromDown);
+ 	serverToDown.loadConfig();
+ 	serverToDown.init( &msgQueueFromDown, &msgQueueFromDown);
  	std::thread th2{ &MySocket_server::serv, &serverToDown};
 
 // 	th1.join();
