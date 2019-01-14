@@ -18,19 +18,18 @@ int main(int argc, char **argv) {
 //		init_daemon();
 	}
 
-	queue<MSGBODY> msgQueueFromUp;
-	queue<MSGBODY> msgQueueFromDown;
+	queue<MSGBODY> msgQueueFromClient;
+	queue<MSGBODY> msgQueueToServer;
 
- 	MySocket_server serverToUp;
- 	MySocket_server serverToDown;
-// 	serverToUp.init(3401, &msgQueueFromUp, &msgQueueFromDown);
-// 	std::thread th1{ &MySocket_server::serv, &serverToUp};
- 	serverToDown.loadConfig();
- 	serverToDown.init( &msgQueueFromDown, &msgQueueFromDown);
- 	std::thread th2{ &MySocket_server::serv, &serverToDown};
+ 	MySocket_server myServer;
 
-// 	th1.join();
- 	th2.join();
 
+ 	myServer.init( &msgQueueFromClient, &msgQueueToServer);
+ 	std::thread th1{ &MySocket_server::serv, &myServer};
+ 	//
+
+ 	myServer.myconnect( );
+
+ 	th1.join();
 	return 0;
 }

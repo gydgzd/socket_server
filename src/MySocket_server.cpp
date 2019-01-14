@@ -25,6 +25,9 @@ MySocket_server::~MySocket_server()
 {
 	close(mn_socketToLocal);
 }
+/*
+ * load config from config file
+ */
 int MySocket_server::loadConfig()
 {
     // read from file
@@ -59,6 +62,7 @@ int MySocket_server::init( queue<MSGBODY> * msgQToRecv = &m_msgQueueRecv, queue<
 {
 	char logmsg[512] = "";
 	mylog.logException("****************************BEGIN****************************");
+	loadConfig();
 	int listenPort = 0;
 	listenPort = std::stoi(mmap_config["toServerPort"]);
     if(listenPort <= 0 || listenPort >=65536)
@@ -84,8 +88,12 @@ int MySocket_server::init( queue<MSGBODY> * msgQToRecv = &m_msgQueueRecv, queue<
         mylog.logException(logmsg);
         exit(-1);
     }
+	memset(&m_serverAddr, 0, sizeof(m_serverAddr));
+	m_serverAddr.sin_family = AF_INET;
+
 	memset(&m_localAddr, 0, sizeof(m_localAddr));
 	m_localAddr.sin_family = AF_INET;
+
 	m_localAddr.sin_addr.s_addr = htonl(INADDR_ANY);  //
 	m_localAddr.sin_port = htons(listenPort);       //
 	int optval = 1;
@@ -136,9 +144,10 @@ int MySocket_server::serv()
 	queue<int> connect_fdQueue;      // for storage of all the fd that accepted, to be served
 
 	char logmsg[512] = "";
+	CONNECTION client;
 	while(true)
 	{
-		CONNECTION client;
+	    memset(&client, 0, sizeof(client));
 		if( -1 == (client.socket_fd = accept(mn_socketToLocal, (struct sockaddr*)&client_addr, &client_len)))
 		{
 			sprintf(logmsg, "Accept error: %s (errno: %d)\n", strerror(errno), errno);
@@ -154,7 +163,6 @@ int MySocket_server::serv()
 		client.serverPort = ntohs(server_addr.sin_port);
 
 		// get client address
-		memset(client.clientIP, 0, 64);
 		inet_ntop(AF_INET,(void *)&client_addr.sin_addr, client.clientIP, 64 );
 		client.clientPort = ntohs(client_addr.sin_port);
 		client.status = 1;
@@ -192,16 +200,16 @@ int MySocket_server::serv()
         sprintf(logmsg, "INFO: Set send buffer = %d, recv buffer = %d\n",nSendBufSize, nRecvBufSize);
         mylog.logException(logmsg);
         */
+        ml_conns.push_back(client);
+        std::list<CONNECTION>::reverse_iterator iter = ml_conns.rbegin();
+		std::thread th_recv{&MySocket_server::myrecv, this, iter};
+	//	std::thread th_send{&MySocket_server::mysend, this, iter};
 
-	//	myrecv(client);
-	//	mysend(client);
-		std::thread th_recv{&MySocket_server::myrecv, this, &client};
-		std::thread th_send{&MySocket_server::mysend, this, &client};
-	//	std::thread th1{&MySocket_server::recvAndSend, this, client};
 		th_recv.join();
-		th_send.join();
-	//	th1.join();
-	//	th1.detach();
+	//	th_send.join();
+
+	//	th_recv.detach();
+	//    th_send.detach();
 	}
 	return 0;
 }
@@ -308,7 +316,7 @@ int MySocket_server::recvAndSend(const CONNECTION client)
  * recv thread function
  *
  */
-int MySocket_server::myrecv( CONNECTION * client)
+int MySocket_server::myrecv( std::list<CONNECTION>::reverse_iterator client)
 {
     char logmsg[512] = "";
     char logHead[64] = "";
@@ -347,7 +355,7 @@ int MySocket_server::myrecv( CONNECTION * client)
                 close(client->socket_fd);
                 // client count -1 when a client exit
                 safeDecClientCounts();
-                sprintf(logmsg, "INFO: %s: The child process is exit.Stop recving. There are %d clients online.", logHead, mn_clientCounts);
+                sprintf(logmsg, "INFO: %s: The client exited. Recv thread exit. There are %d clients online.", logHead, mn_clientCounts);
                 mylog.logException(logmsg);
                 client->status = 0;
                 return 0;
@@ -384,7 +392,7 @@ int MySocket_server::myrecv( CONNECTION * client)
                 close(client->socket_fd);
                 // client count -1 when a client exit
                 safeDecClientCounts();
-                sprintf(logmsg, "INFO: %s: The child process is exit. Recv thread exit. There are %d clients online.", logHead, mn_clientCounts);
+                sprintf(logmsg, "INFO: %s: The client exited. Recv thread exit. There are %d clients online.", logHead, mn_clientCounts);
                 client->status = 0;
                 mylog.logException(logmsg);
 
@@ -407,7 +415,8 @@ int MySocket_server::myrecv( CONNECTION * client)
                     mp_msgQueueRecv->push(recvMsg);  // msg push back to the queue
                 }
                 // do something handle the msg that received
-                // ....
+                mp_msgQueueRecv->pop();
+                mp_msgQueueSend->push(recvMsg);
             }
             else
             {
@@ -420,7 +429,7 @@ int MySocket_server::myrecv( CONNECTION * client)
 /*
  * send thread function
  */
-int MySocket_server::mysend( CONNECTION * client)
+int MySocket_server::mysend( std::list<CONNECTION>::reverse_iterator client)
 {
     char logmsg[512] = "";
     char logHead[64] = "";
@@ -451,9 +460,8 @@ int MySocket_server::mysend( CONNECTION * client)
                 return 0;
             }
         }
-
-        sprintf(logmsg, "INFO: %s send %d bytes", logHead, sendLen );
-        mylog.logException(logmsg);
+        MSGBODY tmpmsg;
+        logMsg(&mp_msgQueueSend->front(), logHead);
         // flush the msg if send
         {
             std::lock_guard<std::mutex> guard(g_sendMutex);
@@ -462,28 +470,39 @@ int MySocket_server::mysend( CONNECTION * client)
     }// end of while
     return 0;
 }
-int MySocket_server::myconnect(const char* server_IP, int server_port)
+/*
+ * connect and send msg to server
+ */
+int MySocket_server::myconnect()
 {
-    char logmsg[512] = "";
-    if( inet_pton(AF_INET, server_IP, &m_serverAddr.sin_addr) <= 0)
+    string serverIP = mmap_config["toServerIP"];
+    int serverPort  = std::stoi( mmap_config["toServerPort"]);
+    if( serverIP == "" || serverPort >= 65536 || serverPort <= 0)
     {
-        sprintf(logmsg, "ERROR: connectTo %s error, inet_pton error: %s\n", server_IP, strerror(errno));
+        mylog.logException("INFO: Param 'toServerIP' is empty or 'toServerPort' is not between 1-65535. Stop connecting to server.");
+        return -1;
+    }
+    char logmsg[512] = "";
+    if( inet_pton(AF_INET, serverIP.c_str(), &m_serverAddr.sin_addr) <= 0)
+    {
+        sprintf(logmsg, "ERROR: connectTo %s error, inet_pton error: %s\n", serverIP.c_str(), strerror(errno));
         mylog.logException(logmsg);
         return -1;
     }
-    m_serverAddr.sin_port = htons(server_port);
+    m_serverAddr.sin_port = htons(serverPort);
     if( connect(mn_socketToServer, (struct sockaddr*)&m_serverAddr, sizeof(m_serverAddr)) < 0)
     {
-        sprintf(logmsg, "ERROR: connectTo %s:%d error: %s(errno: %d)\n", server_IP, server_port, strerror(errno), errno);
+        sprintf(logmsg, "ERROR: connectTo %s:%d error: %s(errno: %d). Reconnect after 10s.", serverIP.c_str(), serverPort, strerror(errno), errno);
         mylog.logException(logmsg);
-        return -1;
+        sleep(10);
+        reconnect(mn_socketToServer, m_serverAddr);
     }
     // connect success
     // get server address
     CONNECTION myconn;
     memset(&myconn, 0, sizeof(myconn));
-    memcpy(myconn.serverIP, server_IP, strlen(server_IP));
-    myconn.serverPort = server_port;
+    memcpy(myconn.serverIP, serverIP.c_str(), serverIP.length());
+    myconn.serverPort = serverPort;
 
     // get client address (namely local address)
     myconn.socket_fd = mn_socketToServer;
@@ -493,7 +512,7 @@ int MySocket_server::myconnect(const char* server_IP, int server_port)
     getsockname(mn_socketToServer, (struct sockaddr *)&local_addr, &local_len);
     inet_ntop(AF_INET,(void *)&local_addr.sin_addr, myconn.clientIP, 64 );
     myconn.clientPort = ntohs(local_addr.sin_port);
-
+    myconn.status = 1;
     sprintf(logmsg, "INFO: %s:%d --> %s:%d connected", myconn.clientIP, myconn.clientPort, myconn.serverIP, myconn.serverPort);
     mylog.logException(logmsg);
     // set nonblocking mode
@@ -505,6 +524,18 @@ int MySocket_server::myconnect(const char* server_IP, int server_port)
         return -1;
     }
     fcntl(mn_socketToServer, F_SETFL, flags | O_NONBLOCK);
+    //in order to adapt the param with send,
+    std::list<CONNECTION> lconns;
+    lconns.push_back(myconn);
+    std::list<CONNECTION>::reverse_iterator client = lconns.rbegin();
+//    std::thread th_recv{&MySocket_server::myrecv, this, &myconn};
+    std::thread th_send{&MySocket_server::mysend, this, client};
+
+//    th_recv.join();
+    th_send.join();
+
+//  th_recv.detach();
+//  th_send.detach();
     return 0;
 }
 /*
@@ -624,5 +655,24 @@ int MySocket_server::logMsg(const MSGBODY *recvMsg, const char *logHead)
         sprintf(logmsg, "INFO: %s recved: %s", logHead, recvMsg->msg);
         mylog.logException(logmsg);
     }
+    return 0;
+}
+int MySocket_server::reconnect(int& socketfd, struct sockaddr_in& addr)
+{
+    close(socketfd);
+    char logmsg[512] = "";
+    if( (socketfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+    {
+        sprintf(logmsg, "ERROR: Create socket error: %s(errno: %d)\n", strerror(errno), errno);
+        mylog.logException(logmsg);
+        exit(-1);
+    }
+    while( connect(socketfd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
+    {
+        sprintf(logmsg, "ERROR: reconnect error: %s(errno: %d)\n", strerror(errno), errno);
+        mylog.logException(logmsg);
+        sleep(10);
+    }
+    mylog.logException("INFO: reconnect successfully.");
     return 0;
 }

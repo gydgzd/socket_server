@@ -26,6 +26,7 @@
 #include <netinet/tcp.h> // TCP
 #include <iostream>
 #include <vector>
+#include <list>
 #include <set>
 #include <map>
 #include <queue>
@@ -79,10 +80,10 @@ public:
     int init( queue<MSGBODY> * msgQToRecv, queue<MSGBODY> * msgQToSend); // socket(),get ready to communicate.
     int serv();
     int recvAndSend(const CONNECTION client);
-    int myrecv( CONNECTION * client);      // recv thread function
-    int mysend( CONNECTION * client);      // send thread function
+    int myrecv( std::list<CONNECTION>::reverse_iterator conn);      // recv thread function
+    int mysend( std::list<CONNECTION>::reverse_iterator conn);      // send thread function
     // as a client
-    int myconnect(const char* server_IP, int server_port);// connect
+    int myconnect();// connect
 
     int getMsg();
     int fileSend();                         // transfer file
@@ -97,7 +98,7 @@ private:
     struct sockaddr_in m_localAddr;         // local address, for bind as a server
     struct sockaddr_in m_serverAddr;        // server address,for connect
 
-    vector<string> mv_clients;
+    list<CONNECTION> ml_conns;
     set<string>    mset_clients;            // storage of all client ip that connected to server
     map<string,string> mmap_config;         // map for config
 
@@ -114,7 +115,7 @@ private:
     int msgCheck(const MSGBODY *msg);
     int setKeepalive(int fd, int idle = 10, int interval = 5, int probe = 3);
     int logMsg(const MSGBODY *recvMsg, const char *logHead);
-    int reconnect();
+    int reconnect(int& socketfd, struct sockaddr_in& addr);
 
     int getMyIP();
 	int myclose();                      // close socket
