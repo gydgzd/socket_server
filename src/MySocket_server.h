@@ -114,7 +114,7 @@ private:
     int safeDecClientCounts();              // safely desc a client count
     int msgCheck(const MSGBODY *msg);
     int setKeepalive(int fd, int idle = 10, int interval = 5, int probe = 3);
-    int logMsg(const MSGBODY *recvMsg, const char *logHead);
+    int logMsg(const MSGBODY *pMsg, const char *logHead, int isRecv);
     int reconnect(int& socketfd, struct sockaddr_in& addr);
 
     int getMyIP();

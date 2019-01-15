@@ -113,7 +113,7 @@ int MySocket_server::init( queue<MSGBODY> * msgQToRecv = &m_msgQueueRecv, queue<
 		exit(-1);
         //return -1;
 	}
-	sprintf(logmsg, "INFO: bind succeed to port %d", listenPort);
+	sprintf(logmsg, "INFO: bind to port %d succeed", listenPort);
 	mylog.logException(logmsg);
 	// listen
 	if(-1 == listen(mn_socketToLocal, 10) )
@@ -190,7 +190,7 @@ int MySocket_server::serv()
         socklen_t optl = sizeof(s_length);
         getsockopt(client.socket_fd,SOL_SOCKET,SO_SNDBUF,&s_length,&optl);     //获得连接套接字发送端缓冲区的信息
         getsockopt(client.socket_fd,SOL_SOCKET,SO_RCVBUF,&r_length,&optl);     //获得连接套接字的接收端的缓冲区信息
-        sprintf(logmsg, "INFO: default send buffer = %d, recv buffer = %d\n",s_length, r_length);
+        sprintf(logmsg, "INFO: Default send buffer = %d, recv buffer = %d",s_length, r_length);
         mylog.logException(logmsg);
         // set buffer
     /*  int nRecvBufSize = 64*1024;//设置为64K
@@ -205,10 +205,10 @@ int MySocket_server::serv()
 		std::thread th_recv{&MySocket_server::myrecv, this, iter};
 	//	std::thread th_send{&MySocket_server::mysend, this, iter};
 
-		th_recv.join();
+	//	th_recv.join();
 	//	th_send.join();
 
-	//	th_recv.detach();
+		th_recv.detach();
 	//    th_send.detach();
 	}
 	return 0;
@@ -245,7 +245,7 @@ int MySocket_server::recvAndSend(const CONNECTION client)
 		}
 		else                     // recv success
 		{
-			logMsg(&recvBuf, logHead);
+			logMsg(&recvBuf, logHead, 1);
 			int ret = msgCheck(&recvBuf);
 			if(strcmp((char *)recvBuf.msg,"exit\n")==0 || recvBuf.length == 0)
 			{
@@ -324,6 +324,7 @@ int MySocket_server::myrecv( std::list<CONNECTION>::reverse_iterator client)
 
     int length = 0;
     MSGBODY recvMsg;
+    int err = 0;
     while(true)
     {
         recvMsg.length = 0;
@@ -332,32 +333,33 @@ int MySocket_server::myrecv( std::list<CONNECTION>::reverse_iterator client)
         length = recv(client->socket_fd, &recvMsg, MSGHEAD_LENGTH, 0);
         if(length == -1)     // recv
         {
-            if(errno != 11) // data isnot ready when errno = 11, log other error
+            err = errno;
+            if(err != 11) // data isnot ready when errno = 11, log other error
             {
-
-                sprintf(logmsg, "ERROR: %s: recv error: %d--%s",logHead, errno, strerror(errno) );
+                sprintf(logmsg, "ERROR: %s recv error: %d--%s",logHead, errno, strerror(errno) );
                 mylog.logException(logmsg);
-                if(errno == 9)
+                if(err == 9)
                 {
-                   mylog.logException("ERROR: exit.");
-                   return 0;
+                    close(client->socket_fd);
+                    client->status = 0;
+                    mylog.logException("ERROR: recv exit.");
+                    return 0;
                 }
             }
             //sleep(1);
-            usleep(10000);  // 10ms
-            length = 0;  // set it back to 0
+            usleep(10000);                // 10ms
+            length = 0;                   // set it back to 0
             continue;
         }
-        else                     // recv success
+        else                              // recv success
         {
             if( length == 0 )
             {
                 close(client->socket_fd);
-                // client count -1 when a client exit
-                safeDecClientCounts();
+                client->status = 0;
+                safeDecClientCounts();     // client count -1 when a client exit
                 sprintf(logmsg, "INFO: %s: The client exited. Recv thread exit. There are %d clients online.", logHead, mn_clientCounts);
                 mylog.logException(logmsg);
-                client->status = 0;
                 return 0;
             }
         }
@@ -367,13 +369,16 @@ int MySocket_server::myrecv( std::list<CONNECTION>::reverse_iterator client)
             length = recv(client->socket_fd, recvMsg.msg, recvMsg.length, 0);
         if(length == -1)     // recv
         {
-            if(errno != 11) // data isnot ready when errno = 11, log other error
+            err = errno;
+            if(err != 11) // data isnot ready when errno = 11, log other error
             {
-                sprintf(logmsg, "ERROR: %s: recv error: %d--%s",logHead, errno, strerror(errno) );
+                sprintf(logmsg, "ERROR: %s recv msg error: %d--%s",logHead, errno, strerror(errno) );
                 mylog.logException(logmsg);
-                if(errno == 9)
+                if(err == 9)
                 {
-                   mylog.logException("ERROR: exit.");
+                   close(client->socket_fd);
+                   client->status = 0;
+                   mylog.logException("ERROR: recv exit.");
                    return 0;
                 }
             }
@@ -384,18 +389,16 @@ int MySocket_server::myrecv( std::list<CONNECTION>::reverse_iterator client)
         }
         else                     // recv success
         {
-            logMsg(&recvMsg, logHead);
+            logMsg(&recvMsg, logHead, 1);
             int ret = 0;
             //      ret = msgCheck(&recvBuf);
             if( length == 0 )
             {
                 close(client->socket_fd);
-                // client count -1 when a client exit
-                safeDecClientCounts();
-                sprintf(logmsg, "INFO: %s: The client exited. Recv thread exit. There are %d clients online.", logHead, mn_clientCounts);
                 client->status = 0;
+                safeDecClientCounts();    // client count -1 when a client exit
+                sprintf(logmsg, "INFO: %s: The client exited. Recv thread exit. There are %d clients online.", logHead, mn_clientCounts);
                 mylog.logException(logmsg);
-
                 return 0;
             }else if(ret == 1)  // heart beat
             {
@@ -452,16 +455,17 @@ int MySocket_server::mysend( std::list<CONNECTION>::reverse_iterator client)
         if(send(client->socket_fd, &mp_msgQueueSend->front(), sendLen, 0) == -1)
         {
             int err = errno;
-            sprintf(logmsg, "ERROR: %s: send error: %d--%s\n", logHead, errno, strerror(errno) );
+            sprintf(logmsg, "ERROR: %s: send error: %d--%s\n", logHead, err, strerror(err) );
             mylog.logException(logmsg);
             if(err == EBADF)
             {
+                close(client->socket_fd);
+                client->status = 0;
                 mylog.logException("INFO: Send error, send thread exit.");
                 return 0;
             }
         }
-        MSGBODY tmpmsg;
-        logMsg(&mp_msgQueueSend->front(), logHead);
+        logMsg(&mp_msgQueueSend->front(), logHead, 0);
         // flush the msg if send
         {
             std::lock_guard<std::mutex> guard(g_sendMutex);
@@ -626,20 +630,27 @@ int MySocket_server::setKeepalive(int fd, int idle, int interval, int probe )
  * log Msg
  * when it is hex,    log the lex
  *      it is string, log the string
+ * when isRecv is 0,  log send msg
+ *                1,  log recv msg
  */
-int MySocket_server::logMsg(const MSGBODY *recvMsg, const char *logHead)
+int MySocket_server::logMsg(const MSGBODY *pMsg, const char *logHead, int isRecv)
 {
     char logmsg[256] = "";
-    if(2 == recvMsg->type)             //  hex
+    char direction[32] = "";
+    if(1 == isRecv)
+        sprintf(direction, "received");
+    else
+        sprintf(direction, "send");
+    if(2 == pMsg->type)             //  hex
     {
         try
         {
-            char *p_hexLog = new char[recvMsg->length*3 + 128];    // include the logHead
-            memset(p_hexLog, 0, recvMsg->length*3 + 128);
-            sprintf(p_hexLog, "INFO: %s recved: ", logHead);
+            char *p_hexLog = new char[pMsg->length*3 + 128];    // include the logHead
+            memset(p_hexLog, 0, pMsg->length*3 + 128);
+            sprintf(p_hexLog, "INFO: %s %s: ", logHead, direction);
             int len = strlen(p_hexLog);
-            for(int i=0; i<recvMsg->length; i++)
-                sprintf(p_hexLog+len+3*i, "%02x ", (unsigned char)recvMsg->msg[i]);
+            for(int i=0; i<pMsg->length; i++)
+                sprintf(p_hexLog+len+3*i, "%02x ", (unsigned char)pMsg->msg[i]);
             mylog.logException(p_hexLog);
             delete[] p_hexLog;
         }catch(bad_alloc& bad)
@@ -648,11 +659,11 @@ int MySocket_server::logMsg(const MSGBODY *recvMsg, const char *logHead)
             mylog.logException(logmsg);
         }
     }
-    else if(1 == recvMsg->type)
+    else if(1 == pMsg->type)
     {
-        char logmsg[recvMsg->length + 128];
-        memset(logmsg, 0, recvMsg->length + 128);
-        sprintf(logmsg, "INFO: %s recved: %s", logHead, recvMsg->msg);
+        char logmsg[pMsg->length + 128];
+        memset(logmsg, 0, pMsg->length + 128);
+        sprintf(logmsg, "INFO: %s %s: %s", logHead, pMsg->msg, direction);
         mylog.logException(logmsg);
     }
     return 0;
@@ -674,5 +685,14 @@ int MySocket_server::reconnect(int& socketfd, struct sockaddr_in& addr)
         sleep(10);
     }
     mylog.logException("INFO: reconnect successfully.");
+    // set nonblocking mode
+    int flags;
+    if( (flags = fcntl(socketfd, F_GETFL, 0)) < 0)
+    {
+        sprintf(logmsg, "ERROR: fcntl error: %d--%s", errno, strerror(errno) );
+        mylog.logException(logmsg);
+        return -1;
+    }
+    fcntl(mn_socketToServer, F_SETFL, flags | O_NONBLOCK);
     return 0;
 }
