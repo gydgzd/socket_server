@@ -437,6 +437,13 @@ int MySocket_server::mysend( std::list<CONNECTION>::reverse_iterator client)
     char logmsg[512] = "";
     char logHead[64] = "";
     sprintf(logHead, "%s:%d --> %s:%d ", client->clientIP, client->clientPort, client->serverIP, client->serverPort);
+    printf("%s\n", logHead);
+/*    MSGBODY msgl;
+    msgl.type = 0;
+    msgl.length = 2;
+    strcpy((char*)msgl.msg, "hi");*/
+    int i=0;
+    int err = errno;
     while(true)
     {
         // send
@@ -447,24 +454,30 @@ int MySocket_server::mysend( std::list<CONNECTION>::reverse_iterator client)
         }
         if(mp_msgQueueSend->empty())        // nothing to send
         {
-         //   mylog.logException("INFO: Nothing to send.");
+            mylog.logException("INFO: Nothing to send.");
             sleep(1);
             continue;
         }
         int sendLen = sizeof(mp_msgQueueSend->front().length) + sizeof(mp_msgQueueSend->front().type) + mp_msgQueueSend->front().length;
+        i++;
+   //     if(send(client->socket_fd, msgl.msg, msgl.length, 0) == -1)
         if(send(client->socket_fd, &mp_msgQueueSend->front(), sendLen, 0) == -1)
-        {
-            int err = errno;
-            sprintf(logmsg, "ERROR: %s: send error: %d--%s\n", logHead, err, strerror(err) );
-            mylog.logException(logmsg);
-            if(err == EBADF)
-            {
-                close(client->socket_fd);
-                client->status = 0;
-                mylog.logException("INFO: Send error, send thread exit.");
-                return 0;
-            }
-        }
+		{
+			err = errno;
+			if(err != 11) // data isnot ready when errno = 11, log other error
+			{
+				printf("Send %d\n", i);
+				sprintf(logmsg, "ERROR: %s: send error: %d--%s\n", logHead, err, strerror(err) );
+				mylog.logException(logmsg);
+				if(err == EBADF || err == EPIPE)
+				{
+					close(client->socket_fd);
+					client->status = 0;
+					mylog.logException("INFO: Send error, send thread exit.");
+					return 0;
+				}
+			}
+		}
         logMsg(&mp_msgQueueSend->front(), logHead, 0);
         // flush the msg if send
         {
@@ -529,9 +542,13 @@ int MySocket_server::myconnect()
     }
     fcntl(mn_socketToServer, F_SETFL, flags | O_NONBLOCK);
     //in order to adapt the param with send,
-    std::list<CONNECTION> lconns;
+    static std::list<CONNECTION> lconns;
     lconns.push_back(myconn);
-    std::list<CONNECTION>::reverse_iterator client = lconns.rbegin();
+
+    static std::list<string> lstr;
+    lstr.push_back("hi");
+    auto lll = lstr.rbegin(); cout << lll->at(0) <<endl;
+    auto client = lconns.rbegin();
 //    std::thread th_recv{&MySocket_server::myrecv, this, &myconn};
     std::thread th_send{&MySocket_server::mysend, this, client};
 
@@ -635,6 +652,8 @@ int MySocket_server::setKeepalive(int fd, int idle, int interval, int probe )
  */
 int MySocket_server::logMsg(const MSGBODY *pMsg, const char *logHead, int isRecv)
 {
+	if(pMsg == NULL)
+		return -1;
     char logmsg[256] = "";
     char direction[32] = "";
     if(1 == isRecv)

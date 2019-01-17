@@ -54,18 +54,26 @@ struct MSGBODY
     int type;              // 0:int, 1:string, 2: byte(hex)
     int length;            // length of msg
     BYTE msg[MAXLENGTH];
+    MSGBODY()
+    {
+        memset(this, 0, sizeof(MSGBODY));
+    }
 };
 /*
  * use to form a string clientIP:clientPort--> serverIP:serverPort
  */
 struct CONNECTION
 {
-    int  socket_fd = 0;       //
-    int  status = 0;          // 0: closed; 1:connected
-    int  clientPort = 0;      // test if ok
-    int  serverPort = 0;
-    char clientIP[64] = "";
-    char serverIP[64] = "";
+    int  socket_fd ;       //
+    int  status ;          // 0: closed; 1:connected
+    int  clientPort ;      // test if ok
+    int  serverPort ;
+    char clientIP[64] ;
+    char serverIP[64] ;
+    CONNECTION()
+    {
+        memset(this, 0, sizeof(CONNECTION));
+    }
 };
 
 class MySocket_server
