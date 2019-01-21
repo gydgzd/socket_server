@@ -17,7 +17,7 @@ MySocket_server::MySocket_server()
 
 	mp_msgQueueRecv = NULL;
 	mp_msgQueueSend = NULL;
-
+	signal(SIGPIPE, SIG_IGN);            // ignore SIGPIPE
 	mylog.setMaxFileSize(200*1024*1024); // 200MB
 }
 
@@ -347,7 +347,7 @@ int MySocket_server::myrecv( std::list<CONNECTION>::reverse_iterator client)
                 }
             }
             //sleep(1);
-            usleep(10000);                // 10ms
+            //usleep(10000);                // 10ms
             length = 0;                   // set it back to 0
             continue;
         }
@@ -366,7 +366,10 @@ int MySocket_server::myrecv( std::list<CONNECTION>::reverse_iterator client)
         // recv msg, sometimes because of recvMsg.length is 0,it will return 0
         // so it will confirm that recvMsg.length isnot 0
         if(0 != recvMsg.length)
-            length = recv(client->socket_fd, recvMsg.msg, recvMsg.length, 0);
+        {
+        	printf("type = %d, recvLen = %d\n", recvMsg.type, recvMsg.length);
+        	length = recv(client->socket_fd, recvMsg.msg, recvMsg.length, 0);
+        }
         if(length == -1)     // recv
         {
             err = errno;
@@ -411,6 +414,7 @@ int MySocket_server::myrecv( std::list<CONNECTION>::reverse_iterator client)
             }
             else if(ret == 0)  // valid msg
             {
+            //	printf("sizeof SendQueue: %lu, RecvQueue: %lu\n", mp_msgQueueSend->size(), mp_msgQueueRecv->size());
                 {                // add a lock
                     std::lock_guard<std::mutex> guard(g_recvMutex);
                     if(mp_msgQueueRecv->size() == MAXQUEUELENGTH )
@@ -418,8 +422,16 @@ int MySocket_server::myrecv( std::list<CONNECTION>::reverse_iterator client)
                     mp_msgQueueRecv->push(recvMsg);  // msg push back to the queue
                 }
                 // do something handle the msg that received
-                mp_msgQueueRecv->pop();
-                mp_msgQueueSend->push(recvMsg);
+                {
+					std::lock_guard<std::mutex> guard(g_sendMutex);
+					if(mp_msgQueueSend->size() >= MAXQUEUELENGTH) // limit the size of send queue
+						mp_msgQueueSend->pop();
+					mp_msgQueueSend->push( mp_msgQueueRecv->front() );
+				}
+                {
+                	std::lock_guard<std::mutex> guard(g_recvMutex);
+                	mp_msgQueueRecv->pop();
+                }
             }
             else
             {
@@ -469,7 +481,7 @@ int MySocket_server::mysend( std::list<CONNECTION>::reverse_iterator client)
 				printf("Send %d\n", i);
 				sprintf(logmsg, "ERROR: %s: send error: %d--%s\n", logHead, err, strerror(err) );
 				mylog.logException(logmsg);
-				if(err == EBADF || err == EPIPE)
+				if(err == EBADF || err == EPIPE || err == 104) // 104--Connection reset by peer
 				{
 					close(client->socket_fd);
 					client->status = 0;
@@ -545,12 +557,9 @@ int MySocket_server::myconnect()
     static std::list<CONNECTION> lconns;
     lconns.push_back(myconn);
 
-    static std::list<string> lstr;
-    lstr.push_back("hi");
-    auto lll = lstr.rbegin(); cout << lll->at(0) <<endl;
-    auto client = lconns.rbegin();
+    auto server = lconns.rbegin();
 //    std::thread th_recv{&MySocket_server::myrecv, this, &myconn};
-    std::thread th_send{&MySocket_server::mysend, this, client};
+    std::thread th_send{&MySocket_server::mysend, this, server};
 
 //    th_recv.join();
     th_send.join();
@@ -682,9 +691,16 @@ int MySocket_server::logMsg(const MSGBODY *pMsg, const char *logHead, int isRecv
     {
         char logmsg[pMsg->length + 128];
         memset(logmsg, 0, pMsg->length + 128);
-        sprintf(logmsg, "INFO: %s %s: %s", logHead, pMsg->msg, direction);
+        sprintf(logmsg, "INFO: %s %s: %s", logHead, direction, pMsg->msg);
         mylog.logException(logmsg);
     }
+    else if(0 == pMsg->type)   // int
+	{
+		char logmsg[pMsg->length + 128];
+		memset(logmsg, 0, pMsg->length + 128);
+		sprintf(logmsg, "INFO: %s %s: %d", logHead, direction, *(int *)pMsg->msg);
+		mylog.logException(logmsg);
+	}
     return 0;
 }
 int MySocket_server::reconnect(int& socketfd, struct sockaddr_in& addr)

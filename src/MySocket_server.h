@@ -33,6 +33,7 @@
 #include <thread>
 #include <mutex>
 #include <new>       // to catch bad alloc
+#include <signal.h>
 #include "Mylog.h"
 using namespace std;
 #define CONFIGFILE "config.conf"
