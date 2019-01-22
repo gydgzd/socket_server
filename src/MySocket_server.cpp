@@ -193,13 +193,13 @@ int MySocket_server::serv()
         sprintf(logmsg, "INFO: Default send buffer = %d, recv buffer = %d",s_length, r_length);
         mylog.logException(logmsg);
         // set buffer
-    /*  int nRecvBufSize = 64*1024;//设置为64K
-        setsockopt(client.socket_fd,SOL_SOCKET,SO_RCVBUF,(const char*)&nRecvBufSize,sizeof(int));
-        int nSendBufSize = 64*1024;//设置为64K
+     /*  int nRecvBufSize = 64*1024;//设置为64K
+         setsockopt(client.socket_fd,SOL_SOCKET,SO_RCVBUF,(const char*)&nRecvBufSize,sizeof(int));
+       */ int nSendBufSize = 64*1024;//设置为64K
         setsockopt(client.socket_fd,SOL_SOCKET,SO_SNDBUF,(const char*)&nSendBufSize,sizeof(int));
-        sprintf(logmsg, "INFO: Set send buffer = %d, recv buffer = %d\n",nSendBufSize, nRecvBufSize);
+        sprintf(logmsg, "INFO: Set send buffer = %d \n",nSendBufSize);
         mylog.logException(logmsg);
-        */
+
         ml_conns.push_back(client);
         std::list<CONNECTION>::reverse_iterator iter = ml_conns.rbegin();
 		std::thread th_recv{&MySocket_server::myrecv, this, iter};

@@ -59,6 +59,13 @@ struct MSGBODY
     {
         memset(this, 0, sizeof(MSGBODY));
     }
+    MSGBODY(const MSGBODY & msgbody)
+	{
+		memset(this, 0, sizeof(MSGBODY));
+		type = msgbody.type;
+		length = msgbody.length;
+		memcpy(msg,msgbody.msg,length);
+	}
 };
 /*
  * use to form a string clientIP:clientPort--> serverIP:serverPort
