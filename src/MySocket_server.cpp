@@ -233,7 +233,7 @@ int MySocket_server::recvAndSend(const CONNECTION client)
 		recvBuf.length = recv(client.socket_fd, recvBuf.msg, MAXLENGTH, 0);
 		if(-1 == recvBuf.length)     // recv
 		{
-			// data isnot ready when errno = 11
+			// data is not ready when errno = 11
 			if(errno != 11)
 			{
 				sprintf(logmsg, "ERROR: %s: recv error: %d--%s",logHead, errno, strerror(errno) );
