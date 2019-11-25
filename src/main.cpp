@@ -11,12 +11,17 @@ using namespace std;
 #include "MySocket_server.h"
 extern void init_daemon();
 extern int fileTransfer(int argc, char **argv);
+
+extern int socket_server();
 int main(int argc, char **argv) {
 	if(argc == 1 || 0 != strcmp(argv[1],"-d"))
 	{
 		printf("Enter silent mode\n");
 //		init_daemon();
 	}
+	vector<int> va;
+	printf("%zu\n", va.size());
+	socket_server();
 
 	queue<MSGBODY> msgQueueFromClient;
 	queue<MSGBODY> msgQueueToServer;
