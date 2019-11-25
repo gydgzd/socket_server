@@ -10,29 +10,64 @@ std::mutex g_sendMutex;
 std::mutex g_clientNumMutex;
 MySocket_server::MySocket_server()
 {
-	mn_socket_fd = 0;
-
+	mn_socketToLocal = 0;
+	mn_socketToServer = 0;
 	mn_clientCounts = 0;
-	mn_clientSend = 0;
-	mn_isFlushed = 1;
+//	mn_clientSend = 0;
+
 	mp_msgQueueRecv = NULL;
 	mp_msgQueueSend = NULL;
-
+	signal(SIGPIPE, SIG_IGN);            // ignore SIGPIPE
 	mylog.setMaxFileSize(200*1024*1024); // 200MB
 }
 
 MySocket_server::~MySocket_server()
 {
-	close(mn_socket_fd);
+	close(mn_socketToLocal);
+}
+/*
+ * load config from config file
+ */
+int MySocket_server::loadConfig()
+{
+    // read from file
+    ifstream infile;
+    infile.open(CONFIGFILE, ios_base::in);
+    char logmsg[256] = "";
+    if (!infile)
+    {
+        sprintf(logmsg, "ERR: Load config from %s failed:(%d) %s", CONFIGFILE, errno, strerror(errno));
+        mylog.logException(logmsg);
+        return -1;
+    }
+    string linebuf;
+    string param, value;
+    while (getline(infile, linebuf))   // !infile.eof()
+    {
+        stringstream ss(linebuf);
+        getline(ss, param, '=');
+        ss >> value;
+        if(param.substr(0, 1) == "#" || param.substr(0, 1) == "\r" || param.substr(0, 1) == "\0")
+            continue;
+        mmap_config[param] = value;
+
+    }
+    infile.close();
+    mylog.logException("INFO: Load config from file succeed.");
+
+    return 0;
 }
 
-int MySocket_server::init(int listenPort, queue<MSGBODY> * msgQToRecv = &m_msgQueueRecv, queue<MSGBODY> * msgQToSend = &m_msgQueueSend)
+int MySocket_server::init( queue<MSGBODY> * msgQToRecv = &m_msgQueueRecv, queue<MSGBODY> * msgQToSend = &m_msgQueueSend)
 {
 	char logmsg[512] = "";
 	mylog.logException("****************************BEGIN****************************");
+	loadConfig();
+	int listenPort = 0;
+	listenPort = std::stoi(mmap_config["toServerPort"]);
     if(listenPort <= 0 || listenPort >=65536)
     {
-		mylog.logException("ERROR: listen port error, should between 1-65535! Progran exit.");
+		mylog.logException("ERROR[CONFIG]: Param \"toServerPort error\", should between 1-65535! Program exit.");
 		exit(-1);
 		//return -1;
 	}
@@ -40,40 +75,50 @@ int MySocket_server::init(int listenPort, queue<MSGBODY> * msgQToRecv = &m_msgQu
 	// initialize
 	mp_msgQueueRecv = msgQToRecv;
 	mp_msgQueueSend = msgQToSend;
-	if( (mn_socket_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1 )
+	if( (mn_socketToLocal = socket(AF_INET, SOCK_STREAM, 0)) == -1 )
 	{
-		sprintf(logmsg, "ERROR: Create socket error: %s (errno: %d). Progran exit.", strerror(errno), errno);
+		sprintf(logmsg, "ERROR: Create socket error: %s (errno: %d). Program exit.", strerror(errno), errno);
 		mylog.logException(logmsg);
 		exit(-1);
 		//return -1;
 	}
-
+	if( (mn_socketToServer = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+    {
+        sprintf(logmsg, "ERROR: Create socket error: %s(errno: %d). Program exit.", strerror(errno), errno);
+        mylog.logException(logmsg);
+        exit(-1);
+    }
 	memset(&m_serverAddr, 0, sizeof(m_serverAddr));
 	m_serverAddr.sin_family = AF_INET;
-	m_serverAddr.sin_addr.s_addr = htonl(INADDR_ANY);  //
-	m_serverAddr.sin_port = htons(listenPort);       //
+
+	memset(&m_localAddr, 0, sizeof(m_localAddr));
+	m_localAddr.sin_family = AF_INET;
+
+	m_localAddr.sin_addr.s_addr = htonl(INADDR_ANY);  //
+	m_localAddr.sin_port = htons(listenPort);       //
 	int optval = 1;
-	if(-1 == setsockopt(mn_socket_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)))
+	if(-1 == setsockopt(mn_socketToLocal, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)))
 	{
-		sprintf(logmsg, "ERROR: Reuse addr error: %s (errno: %d). Progran exit.", strerror(errno), errno);
+		sprintf(logmsg, "ERROR: Reuse addr error: %s (errno: %d). Program exit.", strerror(errno), errno);
 		mylog.logException(logmsg);
 		exit(-1);
 		//return -1;
 	}
 
 	// bind
-	if(-1 == bind(mn_socket_fd, (struct sockaddr*)&m_serverAddr, sizeof(m_serverAddr)) )
+	if(-1 == bind(mn_socketToLocal, (struct sockaddr*)&m_localAddr, sizeof(m_localAddr)) )
 	{
-		sprintf(logmsg, "ERROR: Bind error: %s (errno: %d). Progran exit.", strerror(errno), errno);
+		sprintf(logmsg, "ERROR: Bind error: %s (errno: %d). Program exit.", strerror(errno), errno);
 		mylog.logException(logmsg);
 		exit(-1);
         //return -1;
 	}
-	sprintf(logmsg, "INFO: bind succeed to port %d", listenPort);
+	sprintf(logmsg, "INFO: bind to port %d succeed", listenPort);
 	mylog.logException(logmsg);
-	if(-1 == listen(mn_socket_fd, 10)  )
+	// listen
+	if(-1 == listen(mn_socketToLocal, 10) )
 	{
-		sprintf(logmsg, "ERROR: Listen error: %s (errno: %d). Progran exit.", strerror(errno), errno);
+		sprintf(logmsg, "ERROR: Listen error: %s (errno: %d). Program exit.", strerror(errno), errno);
 		mylog.logException(logmsg);
 		exit(-1);
         //return -1;
@@ -99,10 +144,11 @@ int MySocket_server::serv()
 	queue<int> connect_fdQueue;      // for storage of all the fd that accepted, to be served
 
 	char logmsg[512] = "";
+	CONNECTION client;
 	while(true)
 	{
-		CONNECTION client;
-		if( -1 == (client.socket_fd = accept(mn_socket_fd, (struct sockaddr*)&client_addr, &client_len)))
+	    memset(&client, 0, sizeof(client));
+		if( -1 == (client.socket_fd = accept(mn_socketToLocal, (struct sockaddr*)&client_addr, &client_len)))
 		{
 			sprintf(logmsg, "Accept error: %s (errno: %d)\n", strerror(errno), errno);
 			sleep(10);
@@ -117,68 +163,67 @@ int MySocket_server::serv()
 		client.serverPort = ntohs(server_addr.sin_port);
 
 		// get client address
-		memset(client.clientIP, 0, 64);
 		inet_ntop(AF_INET,(void *)&client_addr.sin_addr, client.clientIP, 64 );
 		client.clientPort = ntohs(client_addr.sin_port);
 		client.status = 1;
 		sprintf(logmsg, "INFO: %s:%d --> %s:%d connected, there are %d clients online!", client.clientIP, client.clientPort, client.serverIP, client.serverPort, mn_clientCounts);
 		mylog.logException(logmsg);
+		//set nonlocking mode
+        int flags;
+        if( (flags = fcntl(client.socket_fd, F_GETFL, 0)) < 0)
+        {
+            sprintf(logmsg, "ERROR: %s:%d --> %s:%d: fcntl error: %d--%s. Give up the connection.",client.clientIP, client.clientPort, client.serverIP, client.serverPort, errno, strerror(errno) );
+            mylog.logException(logmsg);
+            continue;
+        }
+        fcntl(client.socket_fd, F_SETFL, flags | O_NONBLOCK);
 		// keepalive
 		int ret = setKeepalive(client.socket_fd, 10, 5, 3);
-		if( ret == -1)
+		if( -1 == ret)
 		{
 		    mylog.logException("ERROR: set keepalive failed!");
 		}
 		else
 		    mylog.logException("INFO: set keepalive succeed!");
-		//
-	//	myrecv(client);
-	//	mysend(client);
-		std::thread th_recv{&MySocket_server::myrecv, this, &client};
-		std::thread th_send{&MySocket_server::mysend, this, &client};
-	//	std::thread th1{&MySocket_server::recvAndSend, this, client};
-		th_recv.join();
-		th_send.join();
-	//	th1.join();
-	//	th1.detach();
+		// get buffer
+        int s_length, r_length;
+        socklen_t optl = sizeof(s_length);
+        getsockopt(client.socket_fd,SOL_SOCKET,SO_SNDBUF,&s_length,&optl);     //获得连接套接字发送端缓冲区的信息
+        getsockopt(client.socket_fd,SOL_SOCKET,SO_RCVBUF,&r_length,&optl);     //获得连接套接字的接收端的缓冲区信息
+        sprintf(logmsg, "INFO: Default send buffer = %d, recv buffer = %d",s_length, r_length);
+        mylog.logException(logmsg);
+        // set buffer
+     /*  int nRecvBufSize = 64*1024;//设置为64K
+         setsockopt(client.socket_fd,SOL_SOCKET,SO_RCVBUF,(const char*)&nRecvBufSize,sizeof(int));
+       */ int nSendBufSize = 64*1024;//设置为64K
+        setsockopt(client.socket_fd,SOL_SOCKET,SO_SNDBUF,(const char*)&nSendBufSize,sizeof(int));
+        sprintf(logmsg, "INFO: Set send buffer = %d \n",nSendBufSize);
+        mylog.logException(logmsg);
+
+        ml_conns.push_back(client);
+        std::list<CONNECTION>::reverse_iterator iter = ml_conns.rbegin();
+		std::thread th_recv{&MySocket_server::myrecv, this, iter};
+	//	std::thread th_send{&MySocket_server::mysend, this, iter};
+
+	//	th_recv.join();
+	//	th_send.join();
+
+		th_recv.detach();
+	//    th_send.detach();
 	}
 	return 0;
 }
 /*
  *  default send buffer 87040, recv buffer 369280
+ *  obsolete
  */
 int MySocket_server::recvAndSend(const CONNECTION client)
 {
-    int isSend = 0;             // whether sended to this client: 1 is send, 0 not
-
-	// get buffer
-/*	int s_length, r_length;
-	socklen_t optl = sizeof(s_length);
-	getsockopt(client.socket_fd,SOL_SOCKET,SO_SNDBUF,&s_length,&optl);     //获得连接套接字发送端缓冲区的信息
-	getsockopt(client.socket_fd,SOL_SOCKET,SO_RCVBUF,&r_length,&optl);     //获得连接套接字的接收端的缓冲区信息
-	printf("send buffer = %d, recv buffer = %d\n",s_length, r_length);
-  */
-
-	// set buffer
-/*	int nRecvBufSize = 64*1024;//设置为64K
-	setsockopt(client.socket_fd,SOL_SOCKET,SO_RCVBUF,(const char*)&nRecvBufSize,sizeof(int));
-	int nSendBufSize = 64*1024;//设置为64K
-	setsockopt(client.socket_fd,SOL_SOCKET,SO_SNDBUF,(const char*)&nSendBufSize,sizeof(int));
-*/
 	MSGBODY recvBuf;
 	char logmsg[512] = "";
 	char logHead[64] = "";
 	sprintf(logHead, "%s:%d --> %s:%d ", client.clientIP, client.clientPort, client.serverIP, client.serverPort);
-	//使用非阻塞io
-	int flags;
-	if( (flags = fcntl(client.socket_fd, F_GETFL, 0)) < 0)
-	{
-	    printf("fcntl error: %s", strerror(errno));
-	    sprintf(logmsg, "ERROR: %s: fcntl error: %d--%s",logHead, errno, strerror(errno) );
-	    mylog.logException(logmsg);
-	    return -1;
-	}
-	fcntl(client.socket_fd, F_SETFL, flags | O_NONBLOCK);
+
 	while(true)
 	{
 		recvBuf.length = 0;
@@ -186,9 +231,9 @@ int MySocket_server::recvAndSend(const CONNECTION client)
 
 		// recv ,  recv() return 0 when connection is closed
 		recvBuf.length = recv(client.socket_fd, recvBuf.msg, MAXLENGTH, 0);
-		if(recvBuf.length == -1)     // recv
+		if(-1 == recvBuf.length)     // recv
 		{
-			// data isnot ready when errno = 11
+			// data is not ready when errno = 11
 			if(errno != 11)
 			{
 				sprintf(logmsg, "ERROR: %s: recv error: %d--%s",logHead, errno, strerror(errno) );
@@ -200,7 +245,7 @@ int MySocket_server::recvAndSend(const CONNECTION client)
 		}
 		else                     // recv success
 		{
-			logMsg(&recvBuf, logHead);
+			logMsg(&recvBuf, logHead, 1);
 			int ret = msgCheck(&recvBuf);
 			if(strcmp((char *)recvBuf.msg,"exit\n")==0 || recvBuf.length == 0)
 			{
@@ -241,17 +286,6 @@ int MySocket_server::recvAndSend(const CONNECTION client)
 		}// end if,  recv finished
 
 		// send
-		{
-			std::lock_guard<std::mutex> guard(g_sendMutex);
-			if(isSend == 1 && mn_isFlushed == 1)    // update send status when flushed
-				isSend = 0;
-		}
-		if(isSend == 1 && mn_isFlushed == 0)        // already send
-		{
-			sprintf(logmsg, "INFO: %s recved %d bytes, message was sent lasttime, %d/%d.", logHead, recvBuf.length ,mn_clientSend, mn_clientCounts);
-			mylog.logException(logmsg);
-			continue;
-		}
 		if(mp_msgQueueSend->empty())
 		{
 			if(0 != recvBuf.length)
@@ -266,25 +300,13 @@ int MySocket_server::recvAndSend(const CONNECTION client)
 			sprintf(logmsg, "ERROR: %s: send error: %d--%s\n", logHead, errno, strerror(errno) );
 			mylog.logException(logmsg);
 		}
-		//
-		// printf("%s %s sent: ", getLocalTime("%Y-%m-%d %H:%M:%S").c_str(), logHead);
-		// for(int i=0; i<mqstr_msgQueueSend->front().length; i++)
-		//      printf("%2x", mqstr_msgQueueSend->front().msg[i]);
-		// printf("\n");
 
 		sprintf(logmsg, "INFO: %s recved %d bytes, send %d bytes", logHead, recvBuf.length, mp_msgQueueSend->front().length );
 		mylog.logException(logmsg);
 		// flush the msg if send
 		{
 			std::lock_guard<std::mutex> guard(g_sendMutex);
-			mn_clientSend++;
-			if(mn_clientSend == mn_clientCounts)
-			{
-				mp_msgQueueSend->pop();
-				mn_clientSend = 0;
-				mn_isFlushed = 1;
-				isSend = 0;
-			}
+			mp_msgQueueSend->pop();
 		}
 	//	printf("In the child process, pid is %d.\n", getpid());
 	}// end of while
@@ -294,35 +316,15 @@ int MySocket_server::recvAndSend(const CONNECTION client)
  * recv thread function
  *
  */
-int MySocket_server::myrecv( CONNECTION * client)
+int MySocket_server::myrecv( std::list<CONNECTION>::reverse_iterator client)
 {
-    // get buffer
-    int r_length;
-    socklen_t optl = sizeof(r_length);
-    getsockopt(client->socket_fd, SOL_SOCKET, SO_RCVBUF, &r_length, &optl);   //获得连接套接字的接收端的缓冲区信息
-    printf("recv buffer = %d\n", r_length);
-
-/*    // set buffer
-    int nRecvBufSize = 64*1024;              //设置为64K
-    setsockopt(client->socket_fd, SOL_SOCKET,SO_RCVBUF, (const char*)&nRecvBufSize, sizeof(int));
-*/
     char logmsg[512] = "";
     char logHead[64] = "";
     sprintf(logHead, "%s:%d --> %s:%d ", client->clientIP, client->clientPort, client->serverIP, client->serverPort);
 
-    //使用非阻塞io
-    int flags;
-    if( (flags = fcntl(client->socket_fd, F_GETFL, 0)) < 0)
-    {
-        printf("fcntl error: %s", strerror(errno));
-        sprintf(logmsg, "ERROR: %s: fcntl error: %d--%s",logHead, errno, strerror(errno) );
-        mylog.logException(logmsg);
-        client->status = 0;
-        return -1;
-    }
-    fcntl(client->socket_fd, F_SETFL, flags | O_NONBLOCK);
     int length = 0;
     MSGBODY recvMsg;
+    int err = 0;
     while(true)
     {
         recvMsg.length = 0;
@@ -331,10 +333,57 @@ int MySocket_server::myrecv( CONNECTION * client)
         length = recv(client->socket_fd, &recvMsg, MSGHEAD_LENGTH, 0);
         if(length == -1)     // recv
         {
-            if(errno != 11) // data isnot ready when errno = 11, log other error
+            err = errno;
+            if(err != 11) // data isnot ready when errno = 11, log other error
             {
-                sprintf(logmsg, "ERROR: %s: recv error: %d--%s",logHead, errno, strerror(errno) );
+                sprintf(logmsg, "ERROR: %s recv error: %d--%s",logHead, errno, strerror(errno) );
                 mylog.logException(logmsg);
+                if(err == 9)
+                {
+                    close(client->socket_fd);
+                    client->status = 0;
+                    mylog.logException("ERROR: recv exit.");
+                    return 0;
+                }
+            }
+            //sleep(1);
+            //usleep(10000);                // 10ms
+            length = 0;                   // set it back to 0
+            continue;
+        }
+        else                              // recv success
+        {
+            if( length == 0 )
+            {
+                close(client->socket_fd);
+                client->status = 0;
+                safeDecClientCounts();     // client count -1 when a client exit
+                sprintf(logmsg, "INFO: %s: The client exited. Recv thread exit. There are %d clients online.", logHead, mn_clientCounts);
+                mylog.logException(logmsg);
+                return 0;
+            }
+        }
+        // recv msg, sometimes because of recvMsg.length is 0,it will return 0
+        // so it will confirm that recvMsg.length isnot 0
+        if(0 != recvMsg.length)
+        {
+        	printf("type = %d, recvLen = %d\n", recvMsg.type, recvMsg.length);
+        	length = recv(client->socket_fd, recvMsg.msg, recvMsg.length, 0);
+        }
+        if(length == -1)     // recv
+        {
+            err = errno;
+            if(err != 11) // data isnot ready when errno = 11, log other error
+            {
+                sprintf(logmsg, "ERROR: %s recv msg error: %d--%s",logHead, errno, strerror(errno) );
+                mylog.logException(logmsg);
+                if(err == 9)
+                {
+                   close(client->socket_fd);
+                   client->status = 0;
+                   mylog.logException("ERROR: recv exit.");
+                   return 0;
+                }
             }
             //sleep(1);
             usleep(10000);  // 10ms
@@ -343,46 +392,16 @@ int MySocket_server::myrecv( CONNECTION * client)
         }
         else                     // recv success
         {
-            if( length == 0 )
-            {
-                close(client->socket_fd);
-                // client count -1 when a client exit
-                safeDecClientCounts();
-                sprintf(logmsg, "INFO: %s: The child process is exit.Stop recving. There are %d clients online.", logHead, mn_clientCounts);
-                mylog.logException(logmsg);
-                client->status = 0;
-                return 0;
-            }
-        }
-        // recv msg, sometimes because of recvMsg.length is 0,it will return 0
-        // so it will confirm that recvMsg.length isnot 0
-        if(0 != recvMsg.length)
-            length = recv(client->socket_fd, recvMsg.msg, recvMsg.length, 0);
-        if(length == -1)     // recv
-        {
-            if(errno != 11) // data isnot ready when errno = 11, log other error
-            {
-                sprintf(logmsg, "ERROR: %s: recv error: %d--%s",logHead, errno, strerror(errno) );
-                mylog.logException(logmsg);
-            }
-            //sleep(1);
-            usleep(10000);  // 10ms
-            length = 0;  // set it back to 0
-        }
-        else                     // recv success
-        {
-            logMsg(&recvMsg, logHead);
+            logMsg(&recvMsg, logHead, 1);
             int ret = 0;
             //      ret = msgCheck(&recvBuf);
             if( length == 0 )
             {
                 close(client->socket_fd);
-                // client count -1 when a client exit
-                safeDecClientCounts();
-                sprintf(logmsg, "INFO: %s: The child process is exit. Recv thread exit. There are %d clients online.", logHead, mn_clientCounts);
                 client->status = 0;
+                safeDecClientCounts();    // client count -1 when a client exit
+                sprintf(logmsg, "INFO: %s: The client exited. Recv thread exit. There are %d clients online.", logHead, mn_clientCounts);
                 mylog.logException(logmsg);
-
                 return 0;
             }else if(ret == 1)  // heart beat
             {
@@ -395,15 +414,24 @@ int MySocket_server::myrecv( CONNECTION * client)
             }
             else if(ret == 0)  // valid msg
             {
-                // add a lock
-                {
+            //	printf("sizeof SendQueue: %lu, RecvQueue: %lu\n", mp_msgQueueSend->size(), mp_msgQueueRecv->size());
+                {                // add a lock
                     std::lock_guard<std::mutex> guard(g_recvMutex);
                     if(mp_msgQueueRecv->size() == MAXQUEUELENGTH )
                         mp_msgQueueRecv->pop();
                     mp_msgQueueRecv->push(recvMsg);  // msg push back to the queue
                 }
                 // do something handle the msg that received
-                // ....
+                {
+					std::lock_guard<std::mutex> guard(g_sendMutex);
+					if(mp_msgQueueSend->size() >= MAXQUEUELENGTH) // limit the size of send queue
+						mp_msgQueueSend->pop();
+					mp_msgQueueSend->push( mp_msgQueueRecv->front() );
+				}
+                {
+                	std::lock_guard<std::mutex> guard(g_recvMutex);
+                	mp_msgQueueRecv->pop();
+                }
             }
             else
             {
@@ -416,33 +444,18 @@ int MySocket_server::myrecv( CONNECTION * client)
 /*
  * send thread function
  */
-int MySocket_server::mysend( CONNECTION * client)
+int MySocket_server::mysend( std::list<CONNECTION>::reverse_iterator client)
 {
-    int isSend = 0;             // whether sended to this client: 1 is send, 0 not
-    // get buffer
-    int s_length;
-    socklen_t optl = sizeof(s_length);
-    getsockopt(client->socket_fd,SOL_SOCKET,SO_SNDBUF,&s_length,&optl);     //获得连接套接字发送端缓冲区的信息
-    printf("send buffer = %d\n",s_length);
-/*
-    // set buffer
-    int nSendBufSize = 64*1024;//设置为64K
-    setsockopt(client->socket_fd,SOL_SOCKET,SO_SNDBUF,(const char*)&nSendBufSize,sizeof(int));
-*/
     char logmsg[512] = "";
     char logHead[64] = "";
     sprintf(logHead, "%s:%d --> %s:%d ", client->clientIP, client->clientPort, client->serverIP, client->serverPort);
-
-    //使用非阻塞io
-    int flags;
-    if( (flags = fcntl(client->socket_fd, F_GETFL, 0)) < 0)
-    {
-        printf("fcntl error: %s", strerror(errno));
-        sprintf(logmsg, "ERROR: %s: fcntl error: %d--%s",logHead, errno, strerror(errno) );
-        mylog.logException(logmsg);
-        return -1;
-    }
-    fcntl(client->socket_fd, F_SETFL, flags | O_NONBLOCK);
+    printf("%s\n", logHead);
+/*    MSGBODY msgl;
+    msgl.type = 0;
+    msgl.length = 2;
+    strcpy((char*)msgl.msg, "hi");*/
+    int i=0;
+    int err = errno;
     while(true)
     {
         // send
@@ -451,102 +464,119 @@ int MySocket_server::mysend( CONNECTION * client)
             mylog.logException("INFO: Noticed that connection is closed, send thread exit.");
             return 0;
         }
+        if(mp_msgQueueSend->empty())        // nothing to send
         {
-            std::lock_guard<std::mutex> guard(g_sendMutex);
-            if(isSend == 1 && mn_isFlushed == 1)    // update send status when flushed
-                isSend = 0;
-        }
-        if(isSend == 1 && mn_isFlushed == 0)        // already send
-        {
-            sprintf(logmsg, "INFO: %s message was sent lasttime, %d/%d.", logHead ,mn_clientSend, mn_clientCounts);
-            mylog.logException(logmsg);
-            continue;
-        }
-        if(mp_msgQueueSend->empty())                // nothing to send
-        {
-        //    sprintf(logmsg, "INFO: %s send %d bytes", logHead, 0 );
-         //   mylog.logException(logmsg);
+            mylog.logException("INFO: Nothing to send.");
             sleep(1);
             continue;
         }
         int sendLen = sizeof(mp_msgQueueSend->front().length) + sizeof(mp_msgQueueSend->front().type) + mp_msgQueueSend->front().length;
+        i++;
+   //     if(send(client->socket_fd, msgl.msg, msgl.length, 0) == -1)
         if(send(client->socket_fd, &mp_msgQueueSend->front(), sendLen, 0) == -1)
-        {
-            int err = errno;
-            sprintf(logmsg, "ERROR: %s: send error: %d--%s\n", logHead, errno, strerror(errno) );
-            mylog.logException(logmsg);
-            if(err == EBADF)
-            {
-                mylog.logException("INFO: Send error, send thread exit.");
-                return 0;
-            }
-        }
-
-        sprintf(logmsg, "INFO: %s send %d bytes", logHead, sendLen );
-        mylog.logException(logmsg);
+		{
+			err = errno;
+			if(err != 11) // data isnot ready when errno = 11, log other error
+			{
+				printf("Send %d\n", i);
+				sprintf(logmsg, "ERROR: %s: send error: %d--%s\n", logHead, err, strerror(err) );
+				mylog.logException(logmsg);
+				if(err == EBADF || err == EPIPE || err == 104) // 104--Connection reset by peer
+				{
+					close(client->socket_fd);
+					client->status = 0;
+					mylog.logException("INFO: Send error, send thread exit.");
+					return 0;
+				}
+			}
+		}
+        logMsg(&mp_msgQueueSend->front(), logHead, 0);
         // flush the msg if send
         {
             std::lock_guard<std::mutex> guard(g_sendMutex);
-            mn_clientSend++;
-            if(mn_clientSend == mn_clientCounts)
-            {
-                mp_msgQueueSend->pop();
-                mn_clientSend = 0;
-                mn_isFlushed = 1;
-                isSend = 0;
-            }
+            mp_msgQueueSend->pop();
         }
     }// end of while
     return 0;
 }
-
 /*
- * get msg from keyboard
+ * connect and send msg to server
+ */
+int MySocket_server::myconnect()
+{
+    string serverIP = mmap_config["toServerIP"];
+    int serverPort  = std::stoi( mmap_config["toServerPort"]);
+    if( serverIP == "" || serverPort >= 65536 || serverPort <= 0)
+    {
+        mylog.logException("INFO: Param 'toServerIP' is empty or 'toServerPort' is not between 1-65535. Stop connecting to server.");
+        return -1;
+    }
+    char logmsg[512] = "";
+    if( inet_pton(AF_INET, serverIP.c_str(), &m_serverAddr.sin_addr) <= 0)
+    {
+        sprintf(logmsg, "ERROR: connectTo %s error, inet_pton error: %s\n", serverIP.c_str(), strerror(errno));
+        mylog.logException(logmsg);
+        return -1;
+    }
+    m_serverAddr.sin_port = htons(serverPort);
+    if( connect(mn_socketToServer, (struct sockaddr*)&m_serverAddr, sizeof(m_serverAddr)) < 0)
+    {
+        sprintf(logmsg, "ERROR: connectTo %s:%d error: %s(errno: %d). Reconnect after 10s.", serverIP.c_str(), serverPort, strerror(errno), errno);
+        mylog.logException(logmsg);
+        sleep(10);
+        reconnect(mn_socketToServer, m_serverAddr);
+    }
+    // connect success
+    // get server address
+    CONNECTION myconn;
+    memset(&myconn, 0, sizeof(myconn));
+    memcpy(myconn.serverIP, serverIP.c_str(), serverIP.length());
+    myconn.serverPort = serverPort;
+
+    // get client address (namely local address)
+    myconn.socket_fd = mn_socketToServer;
+    struct sockaddr_in local_addr;
+    socklen_t local_len = sizeof(local_addr);
+    memset(&local_addr, 0, local_len);
+    getsockname(mn_socketToServer, (struct sockaddr *)&local_addr, &local_len);
+    inet_ntop(AF_INET,(void *)&local_addr.sin_addr, myconn.clientIP, 64 );
+    myconn.clientPort = ntohs(local_addr.sin_port);
+    myconn.status = 1;
+    sprintf(logmsg, "INFO: %s:%d --> %s:%d connected", myconn.clientIP, myconn.clientPort, myconn.serverIP, myconn.serverPort);
+    mylog.logException(logmsg);
+    // set nonblocking mode
+    int flags;
+    if( (flags = fcntl(mn_socketToServer, F_GETFL, 0)) < 0)
+    {
+        sprintf(logmsg, "ERROR: fcntl error: %d--%s", errno, strerror(errno) );
+        mylog.logException(logmsg);
+        return -1;
+    }
+    fcntl(mn_socketToServer, F_SETFL, flags | O_NONBLOCK);
+    //in order to adapt the param with send,
+    static std::list<CONNECTION> lconns;
+    lconns.push_back(myconn);
+
+    auto server = lconns.rbegin();
+//    std::thread th_recv{&MySocket_server::myrecv, this, &myconn};
+    std::thread th_send{&MySocket_server::mysend, this, server};
+
+//    th_recv.join();
+    th_send.join();
+
+//  th_recv.detach();
+//  th_send.detach();
+    return 0;
+}
+/*
+ * get msg from somewhere
  */
 int MySocket_server::getMsg()
 {
    // fgets((char *)m_sendBuf.msg, sizeof(m_sendBuf.msg), stdin);
 	return 0;
 }
-/*
- * send msg
- */
-int MySocket_server::sendMsg()
-{
-	MSGBODY recvBuffer;
-	MSGBODY sendBuffer;
-	recvBuffer.length = 0;
-	memset(recvBuffer.msg, 0, sizeof(recvBuffer.msg));
-	sendBuffer.length = 0;
-	memset(sendBuffer.msg, 0, sizeof(sendBuffer.msg));
 
-	char logmsg[512] = "";
-	if( send(mn_socket_fd, sendBuffer.msg, sizeof(sendBuffer.msg), 0) < 0)
-	{
-		sprintf(logmsg, "send msg error: %s(errno: %d)", strerror(errno), errno);
-		mylog.logException(logmsg);
-		close(mn_socket_fd);
-		return -1;
-	}
-	printf("send msg to server: %s\n", sendBuffer.msg);
-
-	if(strcmp((char *)sendBuffer.msg, "exit\n")==0)
-	{
-		mylog.logException("INFO: exit.");
-		close(mn_socket_fd);
-		return -1;
-	}
-	if((recvBuffer.length = recv(mn_socket_fd, recvBuffer.msg, MAXLENGTH, 0)) == -1)
-	{
-		sprintf(logmsg, "ERROR: receive error: %s(errno: %d)", strerror(errno), errno);
-		mylog.logException(logmsg);
-		close(mn_socket_fd);
-		return -1;
-	}
-
-	printf("Received: %s", recvBuffer.msg);
-	return 0;
-}
 int MySocket_server::safeAddClientCounts()
 {
 	std::lock_guard<std::mutex> guard(g_sendMutex);
@@ -560,7 +590,7 @@ int MySocket_server::safeDecClientCounts()
 	return 0;
 }
 /*
- * to check if a msg is valid,legal
+ * to check if a msg is valid and legal
  * should be begin with FFFFFFFF, end with EEEEEEEE, 31 byte at least
  * if the 15th byte is 0x00, regard it as a heartbeat, return 1;
  * if the msg is invalid, return -1; else return 0;
@@ -624,20 +654,31 @@ int MySocket_server::setKeepalive(int fd, int idle, int interval, int probe )
 }
 /*
  * log Msg
+ * when it is hex,    log the lex
+ *      it is string, log the string
+ * when isRecv is 0,  log send msg
+ *                1,  log recv msg
  */
-int MySocket_server::logMsg(const MSGBODY *recvMsg, const char *logHead)
+int MySocket_server::logMsg(const MSGBODY *pMsg, const char *logHead, int isRecv)
 {
+	if(pMsg == NULL)
+		return -1;
     char logmsg[256] = "";
-    if(2 == recvMsg->type)             //  hex
+    char direction[32] = "";
+    if(1 == isRecv)
+        sprintf(direction, "received");
+    else
+        sprintf(direction, "send");
+    if(2 == pMsg->type)             //  hex
     {
         try
         {
-            char *p_hexLog = new char[recvMsg->length*3 + 128];    // include the logHead
-            memset(p_hexLog, 0, recvMsg->length*3 + 128);
-            sprintf(p_hexLog, "INFO: %s recved: ", logHead);
+            char *p_hexLog = new char[pMsg->length*3 + 128];    // include the logHead
+            memset(p_hexLog, 0, pMsg->length*3 + 128);
+            sprintf(p_hexLog, "INFO: %s %s: ", logHead, direction);
             int len = strlen(p_hexLog);
-            for(int i=0; i<recvMsg->length; i++)
-                sprintf(p_hexLog+len+3*i, "%02x ", (unsigned char)recvMsg->msg[i]);
+            for(int i=0; i<pMsg->length; i++)
+                sprintf(p_hexLog+len+3*i, "%02x ", (unsigned char)pMsg->msg[i]);
             mylog.logException(p_hexLog);
             delete[] p_hexLog;
         }catch(bad_alloc& bad)
@@ -646,12 +687,47 @@ int MySocket_server::logMsg(const MSGBODY *recvMsg, const char *logHead)
             mylog.logException(logmsg);
         }
     }
-    else if(1 == recvMsg->type)
+    else if(1 == pMsg->type)
     {
-        char logmsg[recvMsg->length + 128];
-        memset(logmsg, 0, recvMsg->length + 128);
-        sprintf(logmsg, "INFO: %s recved: %s", logHead, recvMsg->msg);
+        char logmsg[pMsg->length + 128];
+        memset(logmsg, 0, pMsg->length + 128);
+        sprintf(logmsg, "INFO: %s %s: %s", logHead, direction, pMsg->msg);
         mylog.logException(logmsg);
     }
+    else if(0 == pMsg->type)   // int
+	{
+		char logmsg[pMsg->length + 128];
+		memset(logmsg, 0, pMsg->length + 128);
+		sprintf(logmsg, "INFO: %s %s: %d", logHead, direction, *(int *)pMsg->msg);
+		mylog.logException(logmsg);
+	}
+    return 0;
+}
+int MySocket_server::reconnect(int& socketfd, struct sockaddr_in& addr)
+{
+    close(socketfd);
+    char logmsg[512] = "";
+    if( (socketfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+    {
+        sprintf(logmsg, "ERROR: Create socket error: %s(errno: %d)\n", strerror(errno), errno);
+        mylog.logException(logmsg);
+        exit(-1);
+    }
+    while( connect(socketfd, (struct sockaddr*)&addr, sizeof(addr)) < 0)
+    {
+        sprintf(logmsg, "ERROR: reconnect error: %s(errno: %d)\n", strerror(errno), errno);
+        mylog.logException(logmsg);
+        sleep(10);
+    }
+    mylog.logException("INFO: reconnect successfully.");
+    // set nonblocking mode
+    int flags;
+    if( (flags = fcntl(socketfd, F_GETFL, 0)) < 0)
+    {
+        sprintf(logmsg, "ERROR: fcntl error: %d--%s", errno, strerror(errno) );
+        mylog.logException(logmsg);
+        return -1;
+    }
+    fcntl(mn_socketToServer, F_SETFL, flags | O_NONBLOCK);
     return 0;
 }
