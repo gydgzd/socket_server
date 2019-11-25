@@ -193,11 +193,11 @@ int MySocket_server::serv()
         sprintf(logmsg, "INFO: Default send buffer = %d, recv buffer = %d",s_length, r_length);
         mylog.logException(logmsg);
         // set buffer
-     /*  int nRecvBufSize = 64*1024;//设置为64K
-         setsockopt(client.socket_fd,SOL_SOCKET,SO_RCVBUF,(const char*)&nRecvBufSize,sizeof(int));
-       */ int nSendBufSize = 64*1024;//设置为64K
+    /*  int nRecvBufSize = 64*1024;//设置为64K
+        setsockopt(client.socket_fd,SOL_SOCKET,SO_RCVBUF,(const char*)&nRecvBufSize,sizeof(int));
+     */   int nSendBufSize = 64*1024;//设置为64K
         setsockopt(client.socket_fd,SOL_SOCKET,SO_SNDBUF,(const char*)&nSendBufSize,sizeof(int));
-        sprintf(logmsg, "INFO: Set send buffer = %d \n",nSendBufSize);
+        sprintf(logmsg, "INFO: Set send buffer = %d\n",nSendBufSize);
         mylog.logException(logmsg);
 
         ml_conns.push_back(client);
@@ -422,16 +422,16 @@ int MySocket_server::myrecv( std::list<CONNECTION>::reverse_iterator client)
                     mp_msgQueueRecv->push(recvMsg);  // msg push back to the queue
                 }
                 // do something handle the msg that received
-                {
-					std::lock_guard<std::mutex> guard(g_sendMutex);
-					if(mp_msgQueueSend->size() >= MAXQUEUELENGTH) // limit the size of send queue
-						mp_msgQueueSend->pop();
-					mp_msgQueueSend->push( mp_msgQueueRecv->front() );
-				}
-                {
-                	std::lock_guard<std::mutex> guard(g_recvMutex);
-                	mp_msgQueueRecv->pop();
+          /*      {
+                    std::lock_guard<std::mutex> guard(g_sendMutex);
+                    if(mp_msgQueueSend->size() >= MAXQUEUELENGTH) // limit the size of send queue
+                        mp_msgQueueSend->pop();
+                    mp_msgQueueSend->push( mp_msgQueueRecv->front() );
                 }
+                {
+                    std::lock_guard<std::mutex> guard(g_recvMutex);
+                    mp_msgQueueRecv->pop();
+                }*/
             }
             else
             {
@@ -450,14 +450,20 @@ int MySocket_server::mysend( std::list<CONNECTION>::reverse_iterator client)
     char logHead[64] = "";
     sprintf(logHead, "%s:%d --> %s:%d ", client->clientIP, client->clientPort, client->serverIP, client->serverPort);
     printf("%s\n", logHead);
-/*    MSGBODY msgl;
+    MSGBODY msgl;
     msgl.type = 0;
-    msgl.length = 2;
-    strcpy((char*)msgl.msg, "hi");*/
+    msgl.length = sizeof(int);
+
     int i=0;
-    int err = errno;
+    int err = 0;
+
     while(true)
     {
+        i++;
+        memcpy((void *)msgl.msg, &i, sizeof(int));
+        if(mp_msgQueueSend->size() >= MAXQUEUELENGTH)   // limit the size of queue
+            mp_msgQueueSend->pop();
+    	mp_msgQueueSend->push(msgl);
         // send
         if(client->status == 0)
         {
@@ -471,25 +477,24 @@ int MySocket_server::mysend( std::list<CONNECTION>::reverse_iterator client)
             continue;
         }
         int sendLen = sizeof(mp_msgQueueSend->front().length) + sizeof(mp_msgQueueSend->front().type) + mp_msgQueueSend->front().length;
-        i++;
    //     if(send(client->socket_fd, msgl.msg, msgl.length, 0) == -1)
-        if(send(client->socket_fd, &mp_msgQueueSend->front(), sendLen, 0) == -1)
-		{
-			err = errno;
-			if(err != 11) // data isnot ready when errno = 11, log other error
-			{
-				printf("Send %d\n", i);
-				sprintf(logmsg, "ERROR: %s: send error: %d--%s\n", logHead, err, strerror(err) );
-				mylog.logException(logmsg);
-				if(err == EBADF || err == EPIPE || err == 104) // 104--Connection reset by peer
-				{
-					close(client->socket_fd);
-					client->status = 0;
-					mylog.logException("INFO: Send error, send thread exit.");
-					return 0;
-				}
-			}
-		}
+        if(send(client->socket_fd, &mp_msgQueueSend->front(), sendLen, MSG_NOSIGNAL) == -1)
+        {
+            err = errno;
+            if(err != 11) // data isnot ready when errno = 11, log other error
+            {
+        		printf("Send %d\n", i);
+        		sprintf(logmsg, "ERROR: %s: send error: %d--%s\n", logHead, err, strerror(err) );
+                mylog.logException(logmsg);
+                if(err == EBADF || err == EPIPE || err == 104)
+                {
+                    close(client->socket_fd);
+                    client->status = 0;
+                    mylog.logException("INFO: Send error, send thread exit.");
+                    return 0;
+                }
+        	}
+        }
         logMsg(&mp_msgQueueSend->front(), logHead, 0);
         // flush the msg if send
         {
@@ -545,7 +550,7 @@ int MySocket_server::myconnect()
     sprintf(logmsg, "INFO: %s:%d --> %s:%d connected", myconn.clientIP, myconn.clientPort, myconn.serverIP, myconn.serverPort);
     mylog.logException(logmsg);
     // set nonblocking mode
-    int flags;
+/*    int flags;
     if( (flags = fcntl(mn_socketToServer, F_GETFL, 0)) < 0)
     {
         sprintf(logmsg, "ERROR: fcntl error: %d--%s", errno, strerror(errno) );
@@ -553,10 +558,15 @@ int MySocket_server::myconnect()
         return -1;
     }
     fcntl(mn_socketToServer, F_SETFL, flags | O_NONBLOCK);
+    */
+    // set buffer
+    int nSendBufSize = 64*1024;//设置为64K
+    setsockopt(mn_socketToServer,SOL_SOCKET,SO_SNDBUF,(const char*)&nSendBufSize,sizeof(int));
+    sprintf(logmsg, "INFO: Set send buffer = %d\n",nSendBufSize);
+    mylog.logException(logmsg);
     //in order to adapt the param with send,
     static std::list<CONNECTION> lconns;
     lconns.push_back(myconn);
-
     auto server = lconns.rbegin();
 //    std::thread th_recv{&MySocket_server::myrecv, this, &myconn};
     std::thread th_send{&MySocket_server::mysend, this, server};
@@ -666,7 +676,7 @@ int MySocket_server::logMsg(const MSGBODY *pMsg, const char *logHead, int isRecv
     char logmsg[256] = "";
     char direction[32] = "";
     if(1 == isRecv)
-        sprintf(direction, "received");
+        sprintf(direction, "recv");
     else
         sprintf(direction, "send");
     if(2 == pMsg->type)             //  hex
@@ -692,6 +702,13 @@ int MySocket_server::logMsg(const MSGBODY *pMsg, const char *logHead, int isRecv
         char logmsg[pMsg->length + 128];
         memset(logmsg, 0, pMsg->length + 128);
         sprintf(logmsg, "INFO: %s %s: %s", logHead, direction, pMsg->msg);
+        mylog.logException(logmsg);
+    }
+    else if(0 == pMsg->type)   // int
+    {
+        char logmsg[pMsg->length + 128];
+        memset(logmsg, 0, pMsg->length + 128);
+        sprintf(logmsg, "INFO: %s %s: %d", logHead, direction, *(int *)pMsg->msg);
         mylog.logException(logmsg);
     }
     else if(0 == pMsg->type)   // int
